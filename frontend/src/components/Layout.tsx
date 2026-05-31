@@ -1,4 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "../lib/api";
 
 const nav = [
   { to: "/", label: "Overview", end: true },
@@ -37,8 +39,9 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-5 py-4 text-xs text-[var(--text-muted)]">
-          <span className="font-mono">localhost:20180/v1</span>
+        <div className="space-y-2 px-5 py-4">
+          <p className="font-mono text-xs text-[var(--text-muted)]">localhost:20180/v1</p>
+          <LogoutButton />
         </div>
       </aside>
 
@@ -48,6 +51,21 @@ export function Layout() {
         </div>
       </main>
     </div>
+  );
+}
+
+function LogoutButton() {
+  const qc = useQueryClient();
+  return (
+    <button
+      onClick={async () => {
+        await api.logout();
+        qc.invalidateQueries({ queryKey: ["auth-status"] });
+      }}
+      className="text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+    >
+      Sign out
+    </button>
   );
 }
 

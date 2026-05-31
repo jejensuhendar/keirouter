@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mydisha/keirouter/backend/internal/auth"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/connectors"
@@ -69,6 +70,17 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	codecs := transform.DefaultRegistry()
 	idSvc := identity.New(db.APIKeys())
 
+	authSvc := auth.New(db.Settings(), cfg.Security.JWTSecret, cfg.Security.SessionTTL)
+	seeded, err := authSvc.EnsureDefaults(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("app: init auth: %w", err)
+	}
+	if seeded {
+		log.Warn("seeded default dashboard password",
+			"password", auth.DefaultPassword,
+			"note", "change it on first login via the onboarding flow")
+	}
+
 	pricing := buildPricing()
 	mtr := meter.New(db.Usage(), pricing)
 	bud := budget.New(db.Budgets(), db.Usage())
@@ -87,6 +99,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 		Config:   cfg,
 		Logger:   log,
 		Identity: idSvc,
+		Auth:     authSvc,
 		Pipeline: pipe,
 		Chains:   db.Chains(),
 		Accounts: db.Accounts(),

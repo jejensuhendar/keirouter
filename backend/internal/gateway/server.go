@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/mydisha/keirouter/backend/internal/auth"
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/pipeline"
@@ -26,6 +27,7 @@ type Server struct {
 	cfg      config.Config
 	log      *slog.Logger
 	identity *identity.Service
+	auth     *auth.Service
 	pipeline *pipeline.Pipeline
 	chains   *store.ChainRepo
 	accounts *store.AccountRepo
@@ -41,6 +43,7 @@ type Deps struct {
 	Config   config.Config
 	Logger   *slog.Logger
 	Identity *identity.Service
+	Auth     *auth.Service
 	Pipeline *pipeline.Pipeline
 	Chains   *store.ChainRepo
 	Accounts *store.AccountRepo
@@ -60,6 +63,7 @@ func New(d Deps) *Server {
 		cfg:      d.Config,
 		log:      log,
 		identity: d.Identity,
+		auth:     d.Auth,
 		pipeline: d.Pipeline,
 		chains:   d.Chains,
 		accounts: d.Accounts,
@@ -98,12 +102,23 @@ func (s *Server) routes() chi.Router {
 		r.Get("/v1/models", s.handleListModels)
 	})
 
-	// Dashboard admin API. In local single-user mode this is guarded by the
-	// loopback-only check rather than per-user auth, matching the local proxy
-	// model. SECURITY: when exposing KeiRouter beyond localhost, place this
-	// behind dashboard session auth or a reverse proxy with access control.
+	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but
+	// do not require a session — they are how a session is obtained.
+	r.Route("/api/auth", func(r chi.Router) {
+		r.Use(s.loopbackOnly)
+		s.mountAuth(r)
+		r.Group(func(pr chi.Router) {
+			pr.Use(s.sessionMiddleware)
+			s.mountAuthenticatedAuth(pr)
+		})
+	})
+
+	// Dashboard admin API. Guarded by loopback access AND a valid dashboard
+	// session, so provider credentials and routing config are never exposed to
+	// an unauthenticated caller, even on localhost.
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.loopbackOnly)
+		r.Use(s.sessionMiddleware)
 		s.mountAdmin(r)
 	})
 

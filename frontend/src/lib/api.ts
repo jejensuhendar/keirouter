@@ -68,6 +68,12 @@ export interface UsageSummary {
   since: string;
 }
 
+export interface AuthStatus {
+  authenticated: boolean;
+  using_default: boolean;
+  onboarding_complete: boolean;
+}
+
 class APIError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -97,6 +103,19 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  // Auth (no session required for status/login/logout).
+  authStatus: () => request<AuthStatus>("GET", "/auth/status"),
+  login: (password: string) =>
+    request<{ ok: boolean; using_default: boolean; onboarding_complete: boolean }>(
+      "POST",
+      "/auth/login",
+      { password },
+    ),
+  logout: () => request<{ ok: boolean }>("POST", "/auth/logout"),
+  changePassword: (newPassword: string) =>
+    request<{ ok: boolean }>("POST", "/auth/password", { new_password: newPassword }),
+  completeOnboarding: () => request<{ ok: boolean }>("POST", "/auth/onboarding/complete"),
+
   providers: () => request<{ providers: Provider[] }>("GET", "/providers"),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
