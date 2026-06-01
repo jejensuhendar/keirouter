@@ -37,6 +37,7 @@ type Server struct {
 	chains   *store.ChainRepo
 	aliases  *store.AliasRepo
 	accounts *store.AccountRepo
+	pools    *store.ProxyPoolRepo
 	budgets  *store.BudgetRepo
 	usage    *store.UsageRepo
 	settings *store.SettingsRepo
@@ -59,6 +60,7 @@ type Deps struct {
 	Chains   *store.ChainRepo
 	Aliases  *store.AliasRepo
 	Accounts *store.AccountRepo
+	Pools    *store.ProxyPoolRepo
 	Budgets  *store.BudgetRepo
 	Usage    *store.UsageRepo
 	Settings *store.SettingsRepo
@@ -92,6 +94,7 @@ func New(d Deps) *Server {
 		chains:   d.Chains,
 		aliases:  d.Aliases,
 		accounts: d.Accounts,
+		pools:    d.Pools,
 		budgets:  d.Budgets,
 		usage:    d.Usage,
 		settings: d.Settings,

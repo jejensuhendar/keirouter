@@ -43,6 +43,12 @@ type Credentials struct {
 	Headers map[string]string
 	// Extra holds provider-specific fields (project id, region, deployment...).
 	Extra map[string]string
+
+	// Proxy config (resolved from proxy pool at dispatch time).
+	ProxyURL    string // HTTP/HTTPS/SOCKS proxy URL
+	RelayURL    string // vercel/cloudflare/deno relay URL (mutually exclusive with ProxyURL)
+	NoProxy     string // comma-separated bypass hosts
+	StrictProxy bool   // fail request when proxy unreachable
 }
 
 // MediaConnector is implemented by providers that support embeddings. It is

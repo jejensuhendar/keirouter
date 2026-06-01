@@ -91,6 +91,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
 	// call, persisting the rotated tokens.
 	disp.SetTokenRefresher(oauth.NewTokenManager(v, db.Accounts()))
+	// Resolve proxy pool bindings for accounts that have one.
+	disp.SetPoolSource(db.ProxyPools())
 	slim := slimmer.Default()
 	metrics := observ.New()
 
@@ -125,6 +127,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 		Chains:   db.Chains(),
 		Aliases:  db.Aliases(),
 		Accounts: db.Accounts(),
+		Pools:    db.ProxyPools(),
 		Budgets:  db.Budgets(),
 		Usage:    db.Usage(),
 		Settings: db.Settings(),

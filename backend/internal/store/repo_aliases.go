@@ -40,6 +40,9 @@ func (r *AliasRepo) List(ctx context.Context) ([]ModelAlias, error) {
 
 // Get returns one alias by name.
 func (r *AliasRepo) Get(ctx context.Context, alias string) (ModelAlias, error) {
+	if r == nil || r.db == nil {
+		return ModelAlias{}, ErrNotFound
+	}
 	q := r.db.rebind("SELECT alias, target FROM model_aliases WHERE alias = ?")
 	var a ModelAlias
 	err := r.db.sql.QueryRowContext(ctx, q, alias).Scan(&a.Alias, &a.Target)

@@ -68,6 +68,7 @@ type Account struct {
 	Priority      int
 	Disabled      bool
 	CooldownUntil *time.Time
+	ProxyPoolID   string // bound proxy pool id (empty = no proxy)
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

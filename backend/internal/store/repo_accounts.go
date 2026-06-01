@@ -19,19 +19,20 @@ const accountColumns = `id, tenant_id, provider, label, auth_kind,
 	token_wrapped_dek, token_ciphertext,
 	refresh_wrapped_dek, refresh_ciphertext,
 	token_expires_at, metadata, priority, disabled, cooldown_until,
-	created_at, updated_at`
+	proxy_pool_id, created_at, updated_at`
 
 // Create inserts a new account.
 func (r *AccountRepo) Create(ctx context.Context, a Account) error {
 	q := r.db.rebind(`INSERT INTO accounts (` + accountColumns + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		a.ID, a.TenantID, a.Provider, a.Label, string(a.AuthKind),
 		nullString(a.SecretWrappedDEK), nullString(a.SecretCiphertext),
 		nullString(a.TokenWrappedDEK), nullString(a.TokenCiphertext),
 		nullString(a.RefreshWrappedDEK), nullString(a.RefreshCiphertext),
 		nullTime(a.TokenExpiresAt), a.Metadata, a.Priority, boolToInt(a.Disabled),
-		nullTime(a.CooldownUntil), formatTime(a.CreatedAt), formatTime(a.UpdatedAt))
+		nullTime(a.CooldownUntil), a.ProxyPoolID,
+		formatTime(a.CreatedAt), formatTime(a.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("store: create account: %w", err)
 	}
@@ -128,6 +129,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 		tokenExpires sql.NullString
 		cooldown     sql.NullString
 		disabled     int
+		proxyPoolID  sql.NullString
 		createdRaw   string
 		updatedRaw   string
 	)
@@ -135,7 +137,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 		&a.ID, &a.TenantID, &a.Provider, &a.Label, &authKind,
 		&secretDEK, &secretCT, &tokenDEK, &tokenCT, &refreshDEK, &refreshCT,
 		&tokenExpires, &a.Metadata, &a.Priority, &disabled, &cooldown,
-		&createdRaw, &updatedRaw,
+		&proxyPoolID, &createdRaw, &updatedRaw,
 	)
 	if err != nil {
 		return Account{}, err
@@ -148,6 +150,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 	a.RefreshWrappedDEK = refreshDEK.String
 	a.RefreshCiphertext = refreshCT.String
 	a.Disabled = disabled != 0
+	a.ProxyPoolID = proxyPoolID.String
 	a.CreatedAt = parseTime(createdRaw)
 	a.UpdatedAt = parseTime(updatedRaw)
 	if tokenExpires.Valid {

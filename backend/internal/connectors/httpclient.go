@@ -34,6 +34,40 @@ var sharedClient = &http.Client{
 	},
 }
 
+// clientFor returns an http.Client configured with proxy settings from creds.
+// When creds carry no proxy config, the shared client is returned.
+func clientFor(creds core.Credentials) *http.Client {
+	if creds.ProxyURL == "" && creds.RelayURL == "" {
+		return sharedClient
+	}
+	t := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	if creds.ProxyURL != "" {
+		if u, err := url.Parse(creds.ProxyURL); err == nil {
+			t.Proxy = http.ProxyURL(u)
+		}
+	}
+	return &http.Client{Transport: t}
+}
+
+// relayRequest rewrites a request to go through a relay proxy. The relay
+// protocol uses x-relay-target (origin) and x-relay-path (path+query) headers.
+func relayRequest(req *http.Request, relayURL string) {
+	origOrigin := req.URL.Scheme + "://" + req.URL.Host
+	origPath := req.URL.Path
+	if req.URL.RawQuery != "" {
+		origPath += "?" + req.URL.RawQuery
+	}
+	req.Header.Set("x-relay-target", origOrigin)
+	req.Header.Set("x-relay-path", origPath)
+	relay, _ := url.Parse(relayURL)
+	req.URL = relay
+	req.Host = relay.Host
+}
+
 // doJSON performs a JSON POST and returns the response body, mapping transport
 // and HTTP errors to structured ProviderErrors.
 func doJSON(ctx context.Context, provider, model, url string, body []byte, headers map[string]string) ([]byte, error) {
@@ -46,7 +80,8 @@ func doJSON(ctx context.Context, provider, model, url string, body []byte, heade
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -81,7 +116,8 @@ func doJSONMethod(ctx context.Context, method, provider, model, url string, body
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -111,7 +147,8 @@ func doFormPOST(ctx context.Context, provider, model, endpoint string, form url.
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -146,7 +183,8 @@ func doRaw(ctx context.Context, provider, model, url string, body []byte, header
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -199,7 +237,8 @@ func doMultipart(ctx context.Context, provider, model, url, fileField, filename 
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -228,7 +267,8 @@ func openStream(ctx context.Context, provider, model, url string, body []byte, h
 		req.Header.Set(k, v)
 	}
 
-	resp, err := sharedClient.Do(req)
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
 	if err != nil {
 		return nil, transportError(ctx, provider, model, err)
 	}
@@ -361,6 +401,40 @@ func truncateError(body []byte) string {
 
 // bearer builds an Authorization: Bearer header value.
 func bearer(token string) string { return "Bearer " + token }
+
+// ---- context-based proxy injection -----------------------------------------
+
+type proxyKey struct{}
+
+// WithProxy returns a context carrying proxy configuration from credentials.
+// Call this at the top of a connector's Chat/Stream method:
+//
+//	ctx = WithProxy(ctx, creds)
+func WithProxy(ctx context.Context, creds core.Credentials) context.Context {
+	if creds.ProxyURL == "" && creds.RelayURL == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, proxyKey{}, creds)
+}
+
+// proxyClient returns an http.Client configured with proxy settings from ctx,
+// or the shared client when no proxy is configured.
+func proxyClient(ctx context.Context) *http.Client {
+	creds, ok := ctx.Value(proxyKey{}).(core.Credentials)
+	if !ok {
+		return sharedClient
+	}
+	return clientFor(creds)
+}
+
+// proxyRewrite applies relay header rewriting to req if ctx carries a RelayURL.
+func proxyRewrite(ctx context.Context, req *http.Request) {
+	creds, ok := ctx.Value(proxyKey{}).(core.Credentials)
+	if !ok || creds.RelayURL == "" {
+		return
+	}
+	relayRequest(req, creds.RelayURL)
+}
 
 // mergeHeaders combines connector defaults with credential-supplied headers.
 func mergeHeaders(base map[string]string, extra map[string]string) map[string]string {

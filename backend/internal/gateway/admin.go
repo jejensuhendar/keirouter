@@ -45,6 +45,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/proxy-pools", s.adminListProxyPools)
 	r.Post("/proxy-pools", s.adminCreateProxyPool)
 	r.Delete("/proxy-pools/{id}", s.adminDeleteProxyPool)
+	r.Post("/proxy-pools/{id}/test", s.adminTestProxyPool)
 
 	r.Get("/skills", s.adminListSkills)
 	r.Post("/skills", s.adminCreateSkill)

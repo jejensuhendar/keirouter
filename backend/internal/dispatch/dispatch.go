@@ -15,6 +15,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/capability"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/proxy"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
@@ -48,9 +49,10 @@ type TokenRefresher interface {
 
 // Dispatcher walks fallback chains, yielding resolved attempts.
 type Dispatcher struct {
-	conns    ConnectorSource
-	accounts *store.AccountRepo
-	vault    *vault.Vault
+	conns     ConnectorSource
+	accounts  *store.AccountRepo
+	vault     *vault.Vault
+	pools     proxy.PoolSource
 	refresher TokenRefresher
 	// defaultCooldown is applied to an account when an error carries no
 	// upstream-specified Retry-After.
@@ -70,6 +72,10 @@ func New(conns ConnectorSource, accounts *store.AccountRepo, v *vault.Vault) *Di
 // SetTokenRefresher installs an OAuth token refresher, consulted before opening
 // each account's credentials.
 func (d *Dispatcher) SetTokenRefresher(r TokenRefresher) { d.refresher = r }
+
+// SetPoolSource installs a proxy pool resolver, consulted when an account has a
+// proxy_pool_id binding.
+func (d *Dispatcher) SetPoolSource(p proxy.PoolSource) { d.pools = p }
 
 // Plan resolves the ordered list of attempts for a chain of targets, scoped to
 // a tenant and constrained to the given required capabilities. It returns an
@@ -123,6 +129,13 @@ func (d *Dispatcher) Plan(ctx context.Context, tenantID string, targets []Target
 			if err != nil {
 				lastReason = err.Error()
 				continue
+			}
+			// Resolve proxy pool binding for this account.
+			if d.pools != nil && acc.ProxyPoolID != "" {
+				if perr := proxy.ResolvePool(ctx, d.pools, acc.ProxyPoolID, &creds); perr != nil {
+					lastReason = perr.Error()
+					continue
+				}
 			}
 			attempts = append(attempts, Attempt{
 				Target:  target,
