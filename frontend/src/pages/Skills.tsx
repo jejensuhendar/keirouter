@@ -1,10 +1,24 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, Plus, Trash2 } from "lucide-react";
+import { Sparkles, Plus, Trash2, Copy, Check, BookOpen } from "lucide-react";
 import { api, type Skill } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
 import { Card, SectionHeader, CardHeader, Button, Input, Field, Spinner, EmptyState, Toggle, ErrorBanner } from "../components/ui";
+
+// Built-in reference skills — documentation pages that teach AI agents how to
+// call KeiRouter endpoints. These mirror 9router's skills model: static docs
+// with copyable URLs, not runtime request modifiers.
+const REFERENCE_SKILLS = [
+  { id: "keirouter", name: "KeiRouter (Entry)", endpoint: null as string | null, description: "Setup guide and index of all capabilities." },
+  { id: "keirouter-chat", name: "Chat", endpoint: "/v1/chat/completions", description: "Chat and code generation via OpenAI or Anthropic format with streaming." },
+  { id: "keirouter-image", name: "Image Generation", endpoint: "/v1/images/generations", description: "Text-to-image via DALL-E, Imagen, FLUX, and more." },
+  { id: "keirouter-tts", name: "Text-to-Speech", endpoint: "/v1/audio/speech", description: "OpenAI, ElevenLabs, Edge, Google, Deepgram voices." },
+  { id: "keirouter-stt", name: "Speech-to-Text", endpoint: "/v1/audio/transcriptions", description: "Transcribe via Whisper, Groq, Gemini, Deepgram, AssemblyAI." },
+  { id: "keirouter-embeddings", name: "Embeddings", endpoint: "/v1/embeddings", description: "Vectors for RAG and semantic search." },
+  { id: "keirouter-web-search", name: "Web Search", endpoint: "/v1/search", description: "Tavily, Exa, Brave, Serper, SearXNG, Google PSE, You.com." },
+  { id: "keirouter-web-fetch", name: "Web Fetch", endpoint: "/v1/web/fetch", description: "URL to markdown/text/HTML via Firecrawl, Jina, Tavily, Exa." },
+];
 
 export function SkillsPage() {
   const qc = useQueryClient();
@@ -53,10 +67,23 @@ export function SkillsPage() {
       <PageHeader
         title="Skills"
         icon={Sparkles}
-        description="Reusable system-prompt augmentations applied to matching requests. Enable the ones you want active."
+        description="Reference docs for AI agents and reusable system-prompt augmentations."
       />
 
       <div className="space-y-6">
+        <Card>
+          <SectionHeader
+            title="Reference skills"
+            description="Copy a skill URL and paste it to your AI agent to teach it how to use KeiRouter endpoints."
+            icon={BookOpen}
+          />
+          <div className="divide-y divide-[var(--border)]">
+            {REFERENCE_SKILLS.map((sk) => (
+              <ReferenceSkillRow key={sk.id} skill={sk} />
+            ))}
+          </div>
+        </Card>
+
         <Card>
           <SectionHeader
             title="Create skill"
@@ -100,11 +127,11 @@ export function SkillsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Skills" />
+          <CardHeader title="Custom skills" />
           {skills.isLoading ? (
             <Spinner />
           ) : !skills.data?.skills.length ? (
-            <EmptyState title="No skills yet" hint="Create a skill to augment matching requests." />
+            <EmptyState title="No custom skills yet" hint="Create a skill to augment matching requests with a system prompt." />
           ) : (
             <div className="divide-y divide-[var(--border)]">
               {skills.data.skills.map((sk) => (
@@ -120,6 +147,38 @@ export function SkillsPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+function ReferenceSkillRow({ skill }: { skill: { id: string; name: string; endpoint: string | null; description: string } }) {
+  const [copied, setCopied] = useState(false);
+  const url = `https://raw.githubusercontent.com/user/keirouter/main/skills/${skill.id}/SKILL.md`;
+
+  const copy = () => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-4 px-6 py-4">
+      <div className="min-w-0">
+        <span className="text-sm font-medium">{skill.name}</span>
+        {skill.description && (
+          <p className="mt-0.5 text-xs text-[var(--text-muted)]">{skill.description}</p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {skill.endpoint && (
+          <span className="rounded bg-[var(--bg-subtle)] px-2 py-0.5 font-mono text-xs text-[var(--text-muted)]">
+            {skill.endpoint}
+          </span>
+        )}
+        <Button variant="ghost" onClick={copy} title="Copy skill URL">
+          {copied ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+        </Button>
+      </div>
+    </div>
   );
 }
 
