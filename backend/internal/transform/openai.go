@@ -228,9 +228,9 @@ func (OpenAICodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 		Stream:      req.Stream,
 		ToolChoice:  req.ToolChoice,
 	}
-	if req.Stream {
-		out.StreamOpts = &oaiStreamOpt{IncludeUsage: true}
-	}
+	// Note: stream_options with include_usage is intentionally omitted. Many
+	// OpenAI-compatible providers (MiMo, Volcengine, etc.) reject this field
+	// with 400. Usage is captured from the final stream chunk instead.
 
 	if req.System != "" {
 		sysContent, _ := json.Marshal(req.System)
@@ -301,9 +301,12 @@ type oaiResponse struct {
 }
 
 type oaiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
+	PromptTokensDetails     *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details,omitempty"`
 }
 
 func (OpenAICodec) ParseResponse(body []byte, model string) (*core.ChatResponse, error) {
@@ -338,10 +341,15 @@ func (OpenAICodec) ParseResponse(body []byte, model string) (*core.ChatResponse,
 		FinishReason: mapOAIFinish(choice.FinishReason),
 	}
 	if raw.Usage != nil {
+		var cached int
+		if raw.Usage.PromptTokensDetails != nil {
+			cached = raw.Usage.PromptTokensDetails.CachedTokens
+		}
 		resp.Usage = core.Usage{
 			PromptTokens:     raw.Usage.PromptTokens,
 			CompletionTokens: raw.Usage.CompletionTokens,
 			TotalTokens:      raw.Usage.TotalTokens,
+			CachedTokens:     cached,
 		}
 	}
 	return resp, nil

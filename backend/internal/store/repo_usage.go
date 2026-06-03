@@ -17,14 +17,14 @@ func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
 	q := r.db.rebind(`
 		INSERT INTO usage_records
 			(id, tenant_id, project_id, api_key_id, provider, model, account_id,
-			 prompt_tokens, completion_tokens, cached_tokens, cost_micros,
-			 cache_hit, latency_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+			 cost_micros, cache_hit, latency_ms, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		u.ID, u.TenantID, nullString(u.ProjectID), nullString(u.APIKeyID),
 		u.Provider, u.Model, nullString(u.AccountID),
-		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CostMicros,
-		boolToInt(u.CacheHit), u.LatencyMS, formatTime(u.CreatedAt))
+		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CacheWriteTokens,
+		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, formatTime(u.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("store: record usage: %w", err)
 	}
@@ -62,6 +62,7 @@ type Summary struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	CachedTokens     int64
+	CacheWriteTokens int64
 	CostMicros       int64
 	CacheHits        int64
 }
@@ -74,6 +75,7 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 			COALESCE(SUM(prompt_tokens), 0),
 			COALESCE(SUM(completion_tokens), 0),
 			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
 			COALESCE(SUM(cost_micros), 0),
 			COALESCE(SUM(cache_hit), 0)
 		FROM usage_records
@@ -81,7 +83,7 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 	var s Summary
 	err := r.db.sql.QueryRowContext(ctx, q, tenantID, formatTime(since)).Scan(
 		&s.TotalRequests, &s.PromptTokens, &s.CompletionTokens,
-		&s.CachedTokens, &s.CostMicros, &s.CacheHits)
+		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits)
 	if err != nil {
 		return Summary{}, fmt.Errorf("store: summarize usage: %w", err)
 	}
@@ -137,6 +139,7 @@ type RecentRecord struct {
 	PromptTokens     int
 	CompletionTokens int
 	CachedTokens     int
+	CacheWriteTokens int
 	CostMicros       int64
 	CacheHit         bool
 	LatencyMS        int
@@ -150,7 +153,7 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	}
 	q := r.db.rebind(`
 		SELECT id, provider, model, prompt_tokens, completion_tokens, cached_tokens,
-		       cost_micros, cache_hit, latency_ms, created_at
+		       cache_write_tokens, cost_micros, cache_hit, latency_ms, created_at
 		FROM usage_records
 		WHERE tenant_id = ?
 		ORDER BY created_at DESC
@@ -169,8 +172,8 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 			createdAt string
 		)
 		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
-			&rec.CompletionTokens, &rec.CachedTokens, &rec.CostMicros, &cacheHit,
-			&rec.LatencyMS, &createdAt); err != nil {
+			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
+			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0
@@ -188,6 +191,7 @@ type AccountUsage struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	CachedTokens     int64
+	CacheWriteTokens int64
 	CostMicros       int64
 }
 
@@ -201,6 +205,7 @@ func (r *UsageRepo) ByAccount(ctx context.Context, tenantID string, since time.T
 			COALESCE(SUM(prompt_tokens), 0),
 			COALESCE(SUM(completion_tokens), 0),
 			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
 			COALESCE(SUM(cost_micros), 0)
 		FROM usage_records
 		WHERE tenant_id = ? AND created_at >= ?
@@ -215,7 +220,7 @@ func (r *UsageRepo) ByAccount(ctx context.Context, tenantID string, since time.T
 	for rows.Next() {
 		var a AccountUsage
 		if err := rows.Scan(&a.AccountID, &a.TotalRequests, &a.PromptTokens,
-			&a.CompletionTokens, &a.CachedTokens, &a.CostMicros); err != nil {
+			&a.CompletionTokens, &a.CachedTokens, &a.CacheWriteTokens, &a.CostMicros); err != nil {
 			return nil, err
 		}
 		out = append(out, a)

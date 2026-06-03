@@ -90,7 +90,7 @@ export function SettingsPage() {
             />
             <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
               <span className="text-sm font-medium">Enable caveman mode</span>
-              <Toggle checked={local.caveman_enabled} onChange={(v) => update({ caveman_enabled: v })} />
+              <Toggle checked={local.caveman_enabled} onChange={(v) => update({ caveman_enabled: v, ...(v ? { terse_enabled: false } : {}) })} />
             </div>
             {local.caveman_enabled && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
@@ -116,7 +116,7 @@ export function SettingsPage() {
             />
             <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
               <span className="text-sm font-medium">Enable terse mode</span>
-              <Toggle checked={local.terse_enabled} onChange={(v) => update({ terse_enabled: v })} />
+              <Toggle checked={local.terse_enabled} onChange={(v) => update({ terse_enabled: v, ...(v ? { caveman_enabled: false } : {}) })} />
             </div>
             {local.terse_enabled && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
@@ -158,7 +158,7 @@ export function SettingsPage() {
           {/* Database */}
           <DatabaseSettings />
 
-          {save.isError && <ErrorBanner message={`Failed to save: ${(save.error as Error).message}`} />}
+          {save.isError && <ErrorBanner message={`Failed to save: ${(save.error as Error)?.message ?? "unknown error"}`} />}
         </div>
       )}
     </>

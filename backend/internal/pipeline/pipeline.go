@@ -19,6 +19,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/meter"
+	"github.com/mydisha/keirouter/backend/internal/normalizer"
 	"github.com/mydisha/keirouter/backend/internal/observ"
 	"github.com/mydisha/keirouter/backend/internal/slimmer"
 	"github.com/mydisha/keirouter/backend/internal/terse"
@@ -94,6 +95,7 @@ type Result struct {
 // Chat runs a non-streaming request through the full pipeline with fallback.
 func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options) (*Result, error) {
 	if err := p.preflight(ctx, req, opts); err != nil {
+		p.log.Debug("preflight rejected", "err", err)
 		return nil, err
 	}
 
@@ -102,6 +104,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	// hits cost nothing and skip the upstream entirely.
 	vec := p.embedPrompt(ctx, req)
 	if hit, ok := p.cacheLookup(ctx, vec); ok {
+		p.log.Debug("cache hit, skipping upstream")
 		if p.metrics != nil {
 			p.metrics.RecordCache(true)
 		}
@@ -112,16 +115,23 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 
 	slimStats := p.applyTokenSaving(req, opts)
+	if slimStats != nil {
+		p.log.Debug("slimmer stats", "saved", slimStats.Saved(), "hits", len(slimStats.Hits))
+	}
 
 	required := capability.Required(req)
 	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
 	if err != nil {
+		p.log.Debug("dispatcher plan failed", "err", err)
 		return nil, err
 	}
+	p.log.Debug("dispatcher planned", "attempts", len(attempts), "required", required)
 
 	var lastErr error
-	for _, attempt := range attempts {
+	for i, attempt := range attempts {
 		started := time.Now()
+		p.log.Debug("attempt start", "i", i, "provider", attempt.Target.Provider,
+			"model", attempt.Target.Model, "account", attempt.Account.ID)
 		attemptReq := cloneForAttempt(req, attempt.Target.Model)
 
 		// Inject proxy config from credentials into context so the connector's
@@ -138,6 +148,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 			}
 			if !pe.Fallbackable() {
+				p.log.Debug("attempt not fallbackable, aborting", "kind", pe.Kind)
 				return nil, pe
 			}
 			if p.metrics != nil {
@@ -150,6 +161,9 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 
 		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency)
 		p.cacheStore(ctx, vec, resp)
+		p.log.Debug("attempt success", "provider", attempt.Target.Provider,
+			"model", attempt.Target.Model, "latency_ms", latency.Milliseconds(),
+			"prompt_tok", resp.Usage.PromptTokens, "completion_tok", resp.Usage.CompletionTokens)
 		return &Result{
 			Response:   resp,
 			Provider:   attempt.Target.Provider,
@@ -182,6 +196,7 @@ type StreamResult struct {
 // goroutine that observes the final usage chunk.
 func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
 	if err := p.preflight(ctx, req, opts); err != nil {
+		p.log.Debug("stream preflight rejected", "err", err)
 		return nil, err
 	}
 	p.applyTokenSaving(req, opts)
@@ -189,13 +204,17 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	required := capability.Required(req)
 	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
 	if err != nil {
+		p.log.Debug("stream dispatcher plan failed", "err", err)
 		return nil, err
 	}
+	p.log.Debug("stream dispatcher planned", "attempts", len(attempts))
 
 	var lastErr error
-	for _, attempt := range attempts {
+	for i, attempt := range attempts {
 		attemptReq := cloneForAttempt(req, attempt.Target.Model)
 		started := time.Now()
+		p.log.Debug("stream attempt start", "i", i, "provider", attempt.Target.Provider,
+			"model", attempt.Target.Model, "account", attempt.Account.ID)
 
 		callCtx := core.WithProxy(ctx, attempt.Creds)
 		upstream, callErr := attempt.Conn.Stream(callCtx, attemptReq, attempt.Creds)
@@ -207,13 +226,19 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 			}
 			if !pe.Fallbackable() {
+				p.log.Debug("stream attempt not fallbackable, aborting", "kind", pe.Kind)
 				return nil, pe
 			}
 			if p.metrics != nil {
 				p.metrics.RecordFallback(string(pe.Kind))
 			}
+			p.log.Warn("stream attempt failed, falling back",
+				"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
 			continue
 		}
+
+		p.log.Debug("stream connected", "provider", attempt.Target.Provider,
+			"model", attempt.Target.Model, "account", attempt.Account.ID)
 
 		// Tee the upstream channel so we can meter terminal usage without
 		// blocking the client consumer.
@@ -237,14 +262,16 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 }
 
 // pumpStream forwards chunks to the client channel while capturing usage for
-// metering when the stream completes.
+// metering when the stream completes. Usage chunks are merged rather than
+// replaced: Anthropic streams input tokens in message_start and output tokens
+// in message_delta as separate events — replacing would lose the first.
 func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, out chan<- core.StreamChunk,
 	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time) {
 	defer close(out)
 	var usage core.Usage
 	for chunk := range in {
 		if chunk.Type == core.ChunkUsage && chunk.Usage != nil {
-			usage = *chunk.Usage
+			usage = mergeUsage(usage, *chunk.Usage)
 		}
 		select {
 		case out <- chunk:
@@ -253,6 +280,32 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 		}
 	}
 	p.record(ctx, meta, attempt, usage, false, time.Since(started))
+}
+
+// mergeUsage combines two usage snapshots. Fields present in the new snapshot
+// (non-zero) overwrite the old; zero fields preserve the old value. This
+// handles providers that split usage across multiple events (e.g. Anthropic
+// sends input tokens in message_start and output tokens in message_delta).
+func mergeUsage(old, new core.Usage) core.Usage {
+	if new.PromptTokens != 0 {
+		old.PromptTokens = new.PromptTokens
+	}
+	if new.CompletionTokens != 0 {
+		old.CompletionTokens = new.CompletionTokens
+	}
+	if new.TotalTokens != 0 {
+		old.TotalTokens = new.TotalTokens
+	}
+	if new.CachedTokens != 0 {
+		old.CachedTokens = new.CachedTokens
+	}
+	if new.CacheWriteTokens != 0 {
+		old.CacheWriteTokens = new.CacheWriteTokens
+	}
+	if new.ReasoningTokens != 0 {
+		old.ReasoningTokens = new.ReasoningTokens
+	}
+	return old
 }
 
 // preflight runs validation and the budget guard before any upstream call.
@@ -278,6 +331,11 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 // inject system-prompt directives; if both are enabled, terse runs first and
 // caveman appends after, but in practice only one output-saver is used.
 func (p *Pipeline) applyTokenSaving(req *core.ChatRequest, opts Options) *slimmer.Stats {
+	// Normalize tool call IDs and fix missing tool results before any
+	// downstream processing. This ensures Anthropic-compatible IDs and
+	// complete tool_use/tool_result pairs.
+	normalizer.Apply(req)
+
 	var stats *slimmer.Stats
 	if p.slimmer != nil && opts.Slimmer.Enabled {
 		stats = p.slimmer.Compress(req, opts.Slimmer)

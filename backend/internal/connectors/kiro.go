@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -398,7 +399,7 @@ func init() {
 // Chat performs a non-streaming call by draining the event stream and folding
 // the chunks into a single response.
 func (c *Kiro) Chat(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (*core.ChatResponse, error) {
-	stream, err := c.Stream(ctx, req, creds)
+	stream, err := c.Stream(ctx, req, creds, core.StreamConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +463,7 @@ func (c *Kiro) Chat(ctx context.Context, req *core.ChatRequest, creds core.Crede
 
 // Stream performs a streaming call, parsing the AWS EventStream into canonical
 // chunks.
-func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
@@ -478,6 +479,9 @@ func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		parser := newEventStreamParser(resp.Body)
 		seenTools := map[string]bool{}
@@ -505,6 +509,10 @@ func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 			}
 
 			for _, ch := range kiroFrameToChunks(frame, seenTools, &hasTool) {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():

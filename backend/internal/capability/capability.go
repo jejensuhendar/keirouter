@@ -28,6 +28,7 @@ var rules = []rule{
 	{"gpt-5", []core.Capability{core.CapToolCalling, core.CapVision, core.CapReasoning, core.CapStructuredOutput, core.CapLongContext}},
 	{"o1", []core.Capability{core.CapToolCalling, core.CapReasoning, core.CapStructuredOutput}},
 	{"o3", []core.Capability{core.CapToolCalling, core.CapReasoning, core.CapStructuredOutput}},
+	{"o4", []core.Capability{core.CapToolCalling, core.CapReasoning, core.CapStructuredOutput}},
 	{"claude", []core.Capability{core.CapToolCalling, core.CapVision, core.CapReasoning, core.CapLongContext}},
 	{"gemini", []core.Capability{core.CapToolCalling, core.CapVision, core.CapAudioInput, core.CapLongContext}},
 	{"deepseek", []core.Capability{core.CapToolCalling, core.CapReasoning}},
@@ -38,6 +39,36 @@ var rules = []rule{
 	{"grok", []core.Capability{core.CapToolCalling, core.CapVision}},
 	{"llama", []core.Capability{core.CapToolCalling}},
 	{"mistral", []core.Capability{core.CapToolCalling}},
+	{"mimo", []core.Capability{core.CapToolCalling}},
+	{"mixtral", []core.Capability{core.CapToolCalling}},
+	{"nemotron", []core.Capability{core.CapToolCalling}},
+	{"phi-4", []core.Capability{core.CapToolCalling}},
+	{"phi-3", []core.Capability{core.CapToolCalling}},
+	{"codestral", []core.Capability{core.CapToolCalling}},
+
+	// ByteDance / Volcengine models (doubao, ep-* endpoints).
+	{"doubao", []core.Capability{core.CapToolCalling, core.CapLongContext}},
+	{"bytedance", []core.Capability{core.CapToolCalling, core.CapLongContext}},
+	{"ep-", []core.Capability{core.CapToolCalling, core.CapLongContext}},
+
+	// Perplexity Sonar models.
+	{"sonar", []core.Capability{core.CapToolCalling, core.CapLongContext}},
+
+	// Cohere Command models.
+	{"command", []core.Capability{core.CapToolCalling}},
+
+	// Cerebras (serves llama-family, fast inference).
+	{"cerebras", []core.Capability{core.CapToolCalling}},
+
+	// Cloudflare Workers AI models.
+	{"@cf/", []core.Capability{core.CapToolCalling}},
+
+	// OpenAI Responses API models (codex, gpt-4o via responses).
+	{"codex", []core.Capability{core.CapToolCalling, core.CapReasoning}},
+
+	// Kiro / CodeWhisperer.
+	{"kiro", []core.Capability{core.CapToolCalling}},
+	{"codewhisperer", []core.Capability{core.CapToolCalling}},
 }
 
 // baseline is granted to every model.

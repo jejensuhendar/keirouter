@@ -70,12 +70,17 @@ func (OpenAICodec) ParseStreamLine(line []byte, model string) ([]core.StreamChun
 	}
 
 	if raw.Usage != nil {
+		var cached int
+		if raw.Usage.PromptTokensDetails != nil {
+			cached = raw.Usage.PromptTokensDetails.CachedTokens
+		}
 		chunks = append(chunks, core.StreamChunk{
 			Type: core.ChunkUsage,
 			Usage: &core.Usage{
 				PromptTokens:     raw.Usage.PromptTokens,
 				CompletionTokens: raw.Usage.CompletionTokens,
 				TotalTokens:      raw.Usage.TotalTokens,
+				CachedTokens:     cached,
 			},
 		})
 	}
@@ -98,12 +103,16 @@ func (OpenAICodec) RenderStreamChunk(chunk core.StreamChunk, state *StreamState)
 			delta["role"] = "assistant"
 			state.SentRole = true
 		}
+		args := string(chunk.ToolCall.Arguments)
+		if args == "" {
+			args = "{}"
+		}
 		tc := map[string]any{
 			"index": chunk.Index,
 			"type":  "function",
 			"function": map[string]string{
 				"name":      chunk.ToolCall.Name,
-				"arguments": string(chunk.ToolCall.Arguments),
+				"arguments": args,
 			},
 		}
 		if chunk.ToolCall.ID != "" {

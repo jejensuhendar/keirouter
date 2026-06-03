@@ -173,6 +173,9 @@ export interface ModelUsage {
   prompt_tokens: number;
   completion_tokens: number;
   cost_usd: number;
+  input_per_m?: number;
+  output_per_m?: number;
+  cached_input_per_m?: number;
 }
 
 export interface SeriesPoint {

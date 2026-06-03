@@ -134,7 +134,7 @@ export function BudgetsPage() {
       )}
 
       {/* ── Edit form ──────────────────────────────────────────── */}
-      {editingId && (
+      {editingId && budgets.find((b) => b.id === editingId) && (
         <EditBudgetForm
           budget={budgets.find((b) => b.id === editingId)!}
           onClose={() => setEditingId(null)}

@@ -106,7 +106,7 @@ export function OverviewPage() {
       ) : insights.isError ? (
         <ErrorCard message="Failed to load usage data. Is the backend running?" />
       ) : (
-        <InsightsDashboard data={insights.data!} />
+        insights.data ? <InsightsDashboard data={insights.data} /> : null
       )}
     </>
   );

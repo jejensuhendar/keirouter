@@ -34,13 +34,17 @@ type antStreamEvent struct {
 		Text  string `json:"text"`
 	} `json:"content_block"`
 	Usage *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 	Message *struct {
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -99,8 +103,10 @@ func (AnthropicCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk
 			chunks = append(chunks, core.StreamChunk{
 				Type: core.ChunkUsage,
 				Usage: &core.Usage{
-					CompletionTokens: ev.Usage.OutputTokens,
-					PromptTokens:     ev.Usage.InputTokens,
+					CompletionTokens:  ev.Usage.OutputTokens,
+					PromptTokens:      ev.Usage.InputTokens,
+					CachedTokens:      ev.Usage.CacheReadInputTokens,
+					CacheWriteTokens:  ev.Usage.CacheCreationInputTokens,
 				},
 			})
 		}
@@ -111,8 +117,10 @@ func (AnthropicCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk
 			return []core.StreamChunk{{
 				Type: core.ChunkUsage,
 				Usage: &core.Usage{
-					PromptTokens:     ev.Message.Usage.InputTokens,
-					CompletionTokens: ev.Message.Usage.OutputTokens,
+					PromptTokens:      ev.Message.Usage.InputTokens,
+					CompletionTokens:  ev.Message.Usage.OutputTokens,
+					CachedTokens:      ev.Message.Usage.CacheReadInputTokens,
+					CacheWriteTokens:  ev.Message.Usage.CacheCreationInputTokens,
 				},
 			}}, nil
 		}
@@ -147,6 +155,14 @@ func (AnthropicCodec) RenderStreamChunk(chunk core.StreamChunk, state *StreamSta
 	switch chunk.Type {
 	case core.ChunkText:
 		ensureOpen()
+		// Close any open tool block before starting/continuing text.
+		if toolOpen, _ := state.Custom["tool_open"].(bool); toolOpen {
+			events = append(events, antEvent("content_block_stop", map[string]any{
+				"type": "content_block_stop", "index": state.ToolIndex,
+			}))
+			state.Custom["tool_open"] = false
+			state.ToolIndex++
+		}
 		if !state.OpenedBlock {
 			state.OpenedBlock = true
 			events = append(events, antEvent("content_block_start", map[string]any{
@@ -166,7 +182,59 @@ func (AnthropicCodec) RenderStreamChunk(chunk core.StreamChunk, state *StreamSta
 			"delta": map[string]any{"type": "thinking_delta", "thinking": chunk.Delta},
 		}))
 
+	case core.ChunkToolCall:
+		ensureOpen()
+		if chunk.ToolCall == nil {
+			break
+		}
+
+		// First chunk for a tool call (carries ID and Name) — open a new
+		// tool_use content block. Close any previously open tool block first.
+		if chunk.ToolCall.ID != "" {
+			if toolOpen, _ := state.Custom["tool_open"].(bool); toolOpen {
+				events = append(events, antEvent("content_block_stop", map[string]any{
+					"type": "content_block_stop", "index": state.ToolIndex,
+				}))
+				state.ToolIndex++
+			}
+			if state.Custom == nil {
+				state.Custom = map[string]any{}
+			}
+			state.Custom["tool_open"] = true
+			events = append(events, antEvent("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": state.ToolIndex,
+				"content_block": map[string]any{
+					"type": "tool_use",
+					"id":   chunk.ToolCall.ID,
+					"name": chunk.ToolCall.Name,
+				},
+			}))
+		}
+
+		// Emit argument deltas (skip empty/initial "{}").
+		if toolOpen, _ := state.Custom["tool_open"].(bool); toolOpen {
+			args := string(chunk.ToolCall.Arguments)
+			if args != "" && args != "{}" {
+				events = append(events, antEvent("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": state.ToolIndex,
+					"delta": map[string]any{
+						"type":         "input_json_delta",
+						"partial_json": args,
+					},
+				}))
+			}
+		}
+
 	case core.ChunkFinish:
+		// Close any open tool block, then any open text block.
+		if toolOpen, _ := state.Custom["tool_open"].(bool); toolOpen {
+			events = append(events, antEvent("content_block_stop", map[string]any{
+				"type": "content_block_stop", "index": state.ToolIndex,
+			}))
+			state.Custom["tool_open"] = false
+		}
 		if state.OpenedBlock {
 			events = append(events, antEvent("content_block_stop", map[string]any{
 				"type": "content_block_stop", "index": 0,

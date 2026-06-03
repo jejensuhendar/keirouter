@@ -6,17 +6,21 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/tunnel"
 )
 
-var urlRegex = regexp.MustCompile(`https://([a-z0-9-]+)\.trycloudflare\.com`)
+// urlRegex matches the quick tunnel URL. The pattern requires the hostname to
+// contain at least one hyphen (all generated tunnel hostnames do) and to be
+// preceded by whitespace or start-of-line to avoid matching informational text
+// like "trycloudflare.com".
+var urlRegex = regexp.MustCompile(`(?:^|\s)(https://([a-z0-9]+-[a-z0-9-]+)\.trycloudflare\.com)`)
 
 // QuickTunnelResult holds the result of spawning a quick tunnel.
 type QuickTunnelResult struct {
@@ -40,20 +44,9 @@ func SpawnQuickTunnel(dataDir string, localPort int, log *slog.Logger) (*QuickTu
 		protocol = "http2"
 	}
 
-	configDir, err := os.MkdirTemp("", "cloudflared-quick-")
-	if err != nil {
-		return nil, fmt.Errorf("create temp config dir: %w", err)
-	}
-	configPath := filepath.Join(configDir, "config.yml")
-	if err := os.WriteFile(configPath, []byte("# quick-tunnel config placeholder\n"), 0o600); err != nil {
-		os.RemoveAll(configDir)
-		return nil, fmt.Errorf("write config: %w", err)
-	}
-
 	args := []string{
 		"tunnel",
 		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
-		"--config", configPath,
 		"--no-autoupdate",
 		"--retries", "99",
 	}
@@ -64,17 +57,14 @@ func SpawnQuickTunnel(dataDir string, localPort int, log *slog.Logger) (*QuickTu
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		os.RemoveAll(configDir)
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		os.RemoveAll(configDir)
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
-		os.RemoveAll(configDir)
 		return nil, fmt.Errorf("start cloudflared: %w", err)
 	}
 
@@ -100,12 +90,14 @@ func SpawnQuickTunnel(dataDir string, localPort int, log *slog.Logger) (*QuickTu
 
 		matches := urlRegex.FindAllStringSubmatch(data, -1)
 		for _, m := range matches {
-			host := m[1]
+			// m[1] is the full URL, m[2] is the hostname part.
+			tunnelURL := m[1]
+			host := m[2]
 			if host == "api" {
 				continue
 			}
 			select {
-			case resultCh <- fmt.Sprintf("https://%s.trycloudflare.com", host):
+			case resultCh <- tunnelURL:
 			default:
 			}
 		}
@@ -126,8 +118,11 @@ func SpawnQuickTunnel(dataDir string, localPort int, log *slog.Logger) (*QuickTu
 
 	go func() {
 		err := cmd.Wait()
-		os.RemoveAll(configDir)
 		tunnel.ClearPID(dataDir)
+		// Delay error reporting: if we already got a URL, the process exiting
+		// is fine (quick tunnels can die and respawn). Give URL detection a
+		// moment to complete before signaling the error.
+		time.Sleep(2 * time.Second)
 		if err != nil {
 			select {
 			case errCh <- err:
@@ -136,29 +131,39 @@ func SpawnQuickTunnel(dataDir string, localPort int, log *slog.Logger) (*QuickTu
 		}
 	}()
 
-	// Wait for URL or timeout.
-	select {
-	case tunnelURL := <-resultCh:
-		log.Info("[Tunnel] cloudflared URL detected", "url", tunnelURL)
-		return &QuickTunnelResult{Cmd: cmd, TunnelURL: tunnelURL}, nil
-	case err := <-errCh:
-		mu.Lock()
-		tail := logTail.String()
-		mu.Unlock()
-		if len(tail) > 600 {
-			tail = tail[len(tail)-600:]
+	// Wait for URL or timeout. Prefer URL over error — the process may exit
+	// after emitting the URL (e.g. retry loop).
+	timeout := time.After(90 * time.Second)
+	for {
+		select {
+		case tunnelURL := <-resultCh:
+			log.Info("[Tunnel] cloudflared URL detected", "url", tunnelURL)
+			return &QuickTunnelResult{Cmd: cmd, TunnelURL: tunnelURL}, nil
+		case err := <-errCh:
+			// Double-check: did we get a URL already?
+			select {
+			case tunnelURL := <-resultCh:
+				log.Info("[Tunnel] cloudflared URL detected (after exit)", "url", tunnelURL)
+				return &QuickTunnelResult{Cmd: cmd, TunnelURL: tunnelURL}, nil
+			default:
+			}
+			mu.Lock()
+			tail := logTail.String()
+			mu.Unlock()
+			if len(tail) > 600 {
+				tail = tail[len(tail)-600:]
+			}
+			return nil, fmt.Errorf("cloudflared exited: %v (last log: %s)", err, strings.TrimSpace(tail))
+		case <-timeout:
+			cmd.Process.Kill()
+			mu.Lock()
+			tail := logTail.String()
+			mu.Unlock()
+			if len(tail) > 800 {
+				tail = tail[len(tail)-800:]
+			}
+			return nil, fmt.Errorf("quick tunnel timed out. Last log: %s", strings.TrimSpace(tail))
 		}
-		return nil, fmt.Errorf("cloudflared exited: %v (last log: %s)", err, strings.TrimSpace(tail))
-	case <-time.After(90 * time.Second):
-		cmd.Process.Kill()
-		os.RemoveAll(configDir)
-		mu.Lock()
-		tail := logTail.String()
-		mu.Unlock()
-		if len(tail) > 800 {
-			tail = tail[len(tail)-800:]
-		}
-		return nil, fmt.Errorf("quick tunnel timed out. Last log: %s", strings.TrimSpace(tail))
 	}
 }
 
@@ -202,6 +207,6 @@ func IsCloudflaredRunning(dataDir string) bool {
 	if err != nil {
 		return false
 	}
-	// On Unix, FindProcess always succeeds; sending signal 0 checks existence.
-	return p.Signal(os.Kill) == nil || p.Signal(os.Signal(nil)) == nil
+	// Signal 0 checks existence without killing the process.
+	return p.Signal(syscall.Signal(0)) == nil
 }

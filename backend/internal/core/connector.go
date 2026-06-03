@@ -1,6 +1,20 @@
 package core
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// StreamConfig carries per-request stream instrumentation. Connectors that
+// support it wire OnFirstChunk into their SSE scanning so the pipeline can
+// measure time-to-first-token (TTFT).
+type StreamConfig struct {
+	// OnFirstChunk, if non-nil, is called once when the first meaningful
+	// chunk (text, thinking, or tool_call) arrives from the upstream. The
+	// elapsed duration is measured from when the connector opened the
+	// HTTP connection (not from pipeline entry).
+	OnFirstChunk func(elapsed time.Duration)
+}
 
 // Connector is the contract every provider driver implements. The pipeline
 // selects a connector + credentials, hands it a canonical ChatRequest, and the
@@ -23,8 +37,9 @@ type Connector interface {
 	// Stream performs a streaming completion, emitting canonical chunks on the
 	// returned channel until it is closed. A terminal error is delivered as a
 	// ChunkError followed by channel close, so callers select on ctx.Done and
-	// range over the channel.
-	Stream(ctx context.Context, req *ChatRequest, creds Credentials) (<-chan StreamChunk, error)
+	// range over the channel. cfg carries optional stream instrumentation; a
+	// zero value is valid.
+	Stream(ctx context.Context, req *ChatRequest, creds Credentials, cfg StreamConfig) (<-chan StreamChunk, error)
 }
 
 // Credentials carries the resolved secret material a connector needs for a

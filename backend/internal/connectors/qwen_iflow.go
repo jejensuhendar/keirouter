@@ -128,7 +128,7 @@ func (c *Qwen) Chat(ctx context.Context, req *core.ChatRequest, creds core.Crede
 	return resp, nil
 }
 
-func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -140,7 +140,7 @@ func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 	if err != nil {
 		return nil, err
 	}
-	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec), nil
+	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
 }
 
 // ---- iFlow (apis.iflow.cn) --------------------------------------------------
@@ -248,7 +248,7 @@ func (c *IFlow) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cred
 	return resp, nil
 }
 
-func (c *IFlow) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *IFlow) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -260,5 +260,5 @@ func (c *IFlow) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cr
 	if err != nil {
 		return nil, err
 	}
-	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec), nil
+	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
 }

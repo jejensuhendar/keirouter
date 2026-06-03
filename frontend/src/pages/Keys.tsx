@@ -114,7 +114,7 @@ export function KeysPage() {
         <CardHeader title="Keys" />
         {keys.isLoading ? (
           <Spinner />
-        ) : !keys.data?.keys.length ? (
+        ) : !keys.data?.keys?.length ? (
           <EmptyState title="No keys yet" />
         ) : (
           <div className="divide-y divide-[var(--border)]">

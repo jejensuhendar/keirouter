@@ -16,8 +16,12 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
-	// CachedTokens counts prompt tokens served from a provider-side prompt cache.
+	// CachedTokens counts prompt tokens served from a provider-side prompt cache
+	// (cache reads — typically 50-90% cheaper than standard input).
 	CachedTokens int `json:"cached_tokens,omitempty"`
+	// CacheWriteTokens counts prompt tokens written into a provider-side prompt
+	// cache (cache writes — often priced at 25% *more* than standard input).
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 	// ReasoningTokens counts tokens spent on extended thinking.
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 }

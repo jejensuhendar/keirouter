@@ -291,8 +291,10 @@ type antResponse struct {
 	Content    []antBlock `json:"content"`
 	StopReason string     `json:"stop_reason"`
 	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens        int `json:"input_tokens"`
+		OutputTokens       int `json:"output_tokens"`
+		CacheReadInputTokens  int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -323,9 +325,11 @@ func (AnthropicCodec) ParseResponse(body []byte, model string) (*core.ChatRespon
 		Message:      msg,
 		FinishReason: mapAntStop(raw.StopReason),
 		Usage: core.Usage{
-			PromptTokens:     raw.Usage.InputTokens,
-			CompletionTokens: raw.Usage.OutputTokens,
-			TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
+			PromptTokens:      raw.Usage.InputTokens,
+			CompletionTokens:  raw.Usage.OutputTokens,
+			TotalTokens:       raw.Usage.InputTokens + raw.Usage.OutputTokens,
+			CachedTokens:      raw.Usage.CacheReadInputTokens,
+			CacheWriteTokens:  raw.Usage.CacheCreationInputTokens,
 		},
 	}, nil
 }

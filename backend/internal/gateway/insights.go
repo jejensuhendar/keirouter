@@ -142,15 +142,16 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
-			"total_requests":    sum.TotalRequests,
-			"prompt_tokens":     sum.PromptTokens,
-			"completion_tokens": sum.CompletionTokens,
-			"cached_tokens":     sum.CachedTokens,
-			"cost_usd":          float64(sum.CostMicros) / 1_000_000,
-			"cache_hits":        sum.CacheHits,
-			"success_rate":      successRate,
-			"avg_latency_ms":    avgLatency,
-			"since":             since,
+			"total_requests":     sum.TotalRequests,
+			"prompt_tokens":      sum.PromptTokens,
+			"completion_tokens":  sum.CompletionTokens,
+			"cached_tokens":      sum.CachedTokens,
+			"cache_write_tokens": sum.CacheWriteTokens,
+			"cost_usd":           float64(sum.CostMicros) / 1_000_000,
+			"cache_hits":         sum.CacheHits,
+			"success_rate":       successRate,
+			"avg_latency_ms":     avgLatency,
+			"since":              since,
 		},
 		"providers": providers,
 		"recent":    recentRows,
@@ -178,7 +179,7 @@ func (s *Server) adminModelUsage(w http.ResponseWriter, r *http.Request) {
 		if spec, ok := connectors.SpecByID(m.Provider); ok {
 			display = spec.DisplayName
 		}
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"provider":          m.Provider,
 			"provider_name":     display,
 			"model":             m.Model,
@@ -186,7 +187,14 @@ func (s *Server) adminModelUsage(w http.ResponseWriter, r *http.Request) {
 			"prompt_tokens":     m.PromptTokens,
 			"completion_tokens": m.CompletionTokens,
 			"cost_usd":          float64(m.CostMicros) / 1_000_000,
-		})
+		}
+		// Include per-model pricing if available.
+		if mp, ok := connectors.ModelPriceByProviderModel(m.Provider, m.Model); ok {
+			entry["input_per_m"] = mp.InputPerM
+			entry["output_per_m"] = mp.OutputPerM
+			entry["cached_input_per_m"] = mp.CachedInputPerM
+		}
+		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": out})
 }
@@ -277,11 +285,12 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 			"auth_kind":         a.AuthKind,
 			"priority":          a.Priority,
 			"status":            status,
-			"total_requests":    u.TotalRequests,
-			"prompt_tokens":     u.PromptTokens,
-			"completion_tokens": u.CompletionTokens,
-			"cached_tokens":     u.CachedTokens,
-			"cost_usd":          float64(u.CostMicros) / 1_000_000,
+			"total_requests":     u.TotalRequests,
+			"prompt_tokens":      u.PromptTokens,
+			"completion_tokens":  u.CompletionTokens,
+			"cached_tokens":      u.CachedTokens,
+			"cache_write_tokens": u.CacheWriteTokens,
+			"cost_usd":           float64(u.CostMicros) / 1_000_000,
 			"input_per_m":       inputPerM,
 			"output_per_m":      outputPerM,
 			"updated_at":        a.UpdatedAt,

@@ -27,6 +27,11 @@ type ProviderConfig struct {
 	ExtraAuthParams map[string]string
 	// TokenContentType is "form" (x-www-form-urlencoded, default) or "json".
 	TokenContentType string
+
+	// UserInfoURL is the endpoint called after token exchange to retrieve the
+	// connected user's email and display name.  When empty, no profile fetch
+	// is attempted and the account label falls back to the provider name.
+	UserInfoURL string
 }
 
 // refreshURL returns the configured refresh URL, defaulting to TokenURL.
@@ -51,6 +56,7 @@ var configs = map[string]ProviderConfig{
 		// Claude's token endpoint expects a JSON body.
 		TokenContentType: "json",
 		ExtraAuthParams:  map[string]string{"code": "true"},
+		UserInfoURL:      "https://api.anthropic.com/v1/me",
 	},
 	"codex": {
 		Provider:        "codex",
@@ -60,6 +66,7 @@ var configs = map[string]ProviderConfig{
 		TokenURL:        "https://auth.openai.com/oauth/token",
 		Scopes:          []string{"openid", "profile", "email", "offline_access"},
 		ExtraAuthParams: map[string]string{"id_token_add_organizations": "true", "codex_cli_simplified_flow": "true", "originator": "codex_cli_rs"},
+		UserInfoURL:     "https://auth.openai.com/oauth/userinfo",
 	},
 	"gemini-cli": {
 		Provider:        "gemini-cli",
@@ -70,6 +77,7 @@ var configs = map[string]ProviderConfig{
 		TokenURL:        "https://oauth2.googleapis.com/token",
 		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"},
 		ExtraAuthParams: map[string]string{"access_type": "offline", "prompt": "consent"},
+		UserInfoURL:     "https://www.googleapis.com/oauth2/v2/userinfo",
 	},
 	"antigravity": {
 		Provider:        "antigravity",
@@ -80,6 +88,7 @@ var configs = map[string]ProviderConfig{
 		TokenURL:        "https://oauth2.googleapis.com/token",
 		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"},
 		ExtraAuthParams: map[string]string{"access_type": "offline", "prompt": "consent"},
+		UserInfoURL:     "https://www.googleapis.com/oauth2/v2/userinfo",
 	},
 	"xai": {
 		Provider:          "xai",
@@ -90,6 +99,7 @@ var configs = map[string]ProviderConfig{
 		Scopes:            []string{"openid", "profile", "email", "offline_access", "api"},
 		PKCEVerifierBytes: 96,
 		ExtraAuthParams:   map[string]string{"plan": "generic", "referrer": "cli-proxy-api"},
+		UserInfoURL:       "https://auth.x.ai/oauth2/userinfo",
 	},
 	"github": {
 		Provider:      "github",
@@ -98,6 +108,7 @@ var configs = map[string]ProviderConfig{
 		DeviceCodeURL: "https://github.com/login/device/code",
 		TokenURL:      "https://github.com/login/oauth/access_token",
 		Scopes:        []string{"read:user"},
+		UserInfoURL:   "https://api.github.com/user",
 	},
 	"qwen": {
 		Provider:      "qwen",
@@ -106,6 +117,7 @@ var configs = map[string]ProviderConfig{
 		DeviceCodeURL: "https://chat.qwen.ai/api/v1/oauth2/device/code",
 		TokenURL:      "https://chat.qwen.ai/api/v1/oauth2/token",
 		Scopes:        []string{"openid", "profile", "email", "model.completion"},
+		UserInfoURL:   "https://chat.qwen.ai/api/v1/oauth2/userinfo",
 	},
 	"cline": {
 		Provider:     "cline",
@@ -113,6 +125,7 @@ var configs = map[string]ProviderConfig{
 		AuthorizeURL: "https://api.cline.bot/api/v1/auth/authorize",
 		TokenURL:     "https://api.cline.bot/api/v1/auth/token",
 		RefreshURL:   "https://api.cline.bot/api/v1/auth/refresh",
+		UserInfoURL:  "https://api.cline.bot/api/v1/auth/userinfo",
 	},
 }
 

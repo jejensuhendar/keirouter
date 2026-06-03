@@ -51,7 +51,7 @@ export function CLIToolsPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {tools.data!.tools.map((t) => (
+          {(tools.data?.tools ?? []).map((t) => (
             <button
               key={t.id}
               onClick={() => navigate(`/cli-tools/${t.id}`)}

@@ -1,9 +1,9 @@
 // Package meter records per-request usage and computes cost.
 //
 // Cost is stored in micros (millionths of a USD) as an integer to avoid
-// floating-point drift in budget accounting. The pricing table maps a provider
-// to its per-million-token rates; unknown providers cost zero (treated as free
-// for display purposes, consistent with KeiRouter's savings-tracker model).
+// floating-point drift in budget accounting. The pricing table maps
+// provider/model to its per-million-token rates; unknown models fall back to
+// provider-level rates, then to zero (treated as free for display purposes).
 package meter
 
 import (
@@ -18,22 +18,29 @@ import (
 
 // Price holds per-million-token rates in USD.
 type Price struct {
-	InputPerM  float64
-	OutputPerM float64
+	InputPerM        float64 // standard input tokens
+	OutputPerM       float64 // standard output tokens
+	CachedInputPerM  float64 // cache-read input tokens (often 50-90% off standard)
+	CacheWritePerM   float64 // cache-write input tokens (often 25% above standard)
+	ReasoningPerM    float64 // reasoning/extended-thinking output tokens
 }
 
 // Meter records usage rows and computes cost from a pricing table.
 type Meter struct {
-	usage   *store.UsageRepo
-	pricing map[string]Price
+	usage       *store.UsageRepo
+	pricing     map[string]Price   // provider-level fallback
+	modelPrices map[string]Price   // provider/model-level (e.g. "openai/gpt-4o")
 }
 
-// New builds a Meter backed by a usage repo and a provider pricing table.
-func New(usage *store.UsageRepo, pricing map[string]Price) *Meter {
+// New builds a Meter backed by a usage repo and pricing tables.
+func New(usage *store.UsageRepo, pricing map[string]Price, modelPrices map[string]Price) *Meter {
 	if pricing == nil {
 		pricing = map[string]Price{}
 	}
-	return &Meter{usage: usage, pricing: pricing}
+	if modelPrices == nil {
+		modelPrices = map[string]Price{}
+	}
+	return &Meter{usage: usage, pricing: pricing, modelPrices: modelPrices}
 }
 
 // Event captures the facts about one completed (or cached) request.
@@ -49,25 +56,66 @@ type Event struct {
 	Latency   time.Duration
 }
 
+// resolvePrice looks up the price for a provider/model pair. It tries
+// "provider/model" first, then "provider", then returns a zero price.
+func (m *Meter) resolvePrice(provider, model string) Price {
+	// Try exact model match first.
+	if model != "" {
+		if p, ok := m.modelPrices[provider+"/"+model]; ok {
+			return p
+		}
+		// Also try provider/model without provider prefix (e.g. "gpt-4o" not "openai/gpt-4o").
+		for key, p := range m.modelPrices {
+			if len(key) > len(provider)+1 && key[:len(provider)+1] == provider+"/" {
+				suffix := key[len(provider)+1:]
+				if suffix == model {
+					return p
+				}
+			}
+		}
+	}
+	// Fall back to provider-level.
+	if p, ok := m.pricing[provider]; ok {
+		return p
+	}
+	return Price{}
+}
+
 // CostMicros returns the cost of a usage event in micros of USD. Cached
-// requests cost nothing (the whole point of the cache).
-func (m *Meter) CostMicros(provider string, u core.Usage, cacheHit bool) int64 {
+// requests cost nothing (the whole point of the cache). Cached read tokens
+// use the discounted CachedInputPerM rate; cache write tokens use the
+// (often higher) CacheWritePerM rate. Reasoning tokens use the ReasoningPerM
+// rate when set.
+func (m *Meter) CostMicros(provider, model string, u core.Usage, cacheHit bool) int64 {
 	if cacheHit {
 		return 0
 	}
-	p, ok := m.pricing[provider]
-	if !ok {
-		return 0
+	p := m.resolvePrice(provider, model)
+
+	// Standard input tokens = total input minus cache reads and writes.
+	standardInput := u.PromptTokens - u.CachedTokens - u.CacheWriteTokens
+	if standardInput < 0 {
+		standardInput = 0
 	}
-	// micros = tokens / 1e6 * pricePerM * 1e6 = tokens * pricePerM.
-	inputCost := float64(u.PromptTokens) * p.InputPerM
+
+	// Cost breakdown:
+	//   standard input     * InputPerM
+	// + cache-read input   * CachedInputPerM  (often 50-90% off InputPerM)
+	// + cache-write input  * CacheWritePerM   (often 25% above InputPerM)
+	// + reasoning tokens   * ReasoningPerM    (often same as OutputPerM)
+	// + completion tokens  * OutputPerM
+	inputCost := float64(standardInput) * p.InputPerM
+	cachedReadCost := float64(u.CachedTokens) * p.CachedInputPerM
+	cacheWriteCost := float64(u.CacheWriteTokens) * p.CacheWritePerM
+	reasoningCost := float64(u.ReasoningTokens) * p.ReasoningPerM
 	outputCost := float64(u.CompletionTokens) * p.OutputPerM
-	return int64(inputCost + outputCost)
+
+	return int64(inputCost + cachedReadCost + cacheWriteCost + reasoningCost + outputCost)
 }
 
 // Record persists a usage row for an event and returns the computed cost.
 func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
-	cost := m.CostMicros(ev.Provider, ev.Usage, ev.CacheHit)
+	cost := m.CostMicros(ev.Provider, ev.Model, ev.Usage, ev.CacheHit)
 	rec := store.UsageRecord{
 		ID:               uuid.NewString(),
 		TenantID:         ev.TenantID,
@@ -79,6 +127,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		PromptTokens:     ev.Usage.PromptTokens,
 		CompletionTokens: ev.Usage.CompletionTokens,
 		CachedTokens:     ev.Usage.CachedTokens,
+		CacheWriteTokens: ev.Usage.CacheWriteTokens,
 		CostMicros:       cost,
 		CacheHit:         ev.CacheHit,
 		LatencyMS:        int(ev.Latency.Milliseconds()),
@@ -90,8 +139,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	return cost, nil
 }
 
-// PricingFromCatalog builds a pricing table from provider specs (provider id ->
-// rates). Helper for wiring from the connectors catalog.
+// PricingFromCatalog builds a provider-level pricing table from provider specs.
 func PricingFromCatalog(specs []SpecPrice) map[string]Price {
 	out := make(map[string]Price, len(specs))
 	for _, s := range specs {
@@ -100,8 +148,7 @@ func PricingFromCatalog(specs []SpecPrice) map[string]Price {
 	return out
 }
 
-// SpecPrice is the minimal pricing projection of a provider spec, kept here to
-// avoid a hard dependency on the connectors package.
+// SpecPrice is the minimal pricing projection of a provider spec.
 type SpecPrice struct {
 	ID         string
 	InputPerM  float64

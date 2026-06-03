@@ -60,7 +60,14 @@ func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, ver
 	if err != nil {
 		return nil, err
 	}
-	return mapTokenResponse(raw)
+	tokens, err := mapTokenResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	// Best-effort: fetch the connected user's profile so the dashboard can
+	// show a human-readable label (email / display name).
+	c.FetchUserInfo(ctx, tokens)
+	return tokens, nil
 }
 
 // DeviceCode is the response of a device-authorization request.
@@ -140,12 +147,14 @@ func (c ProviderConfig) PollDeviceToken(ctx context.Context, deviceCode, verifie
 	_ = json.Unmarshal(raw, &parsed)
 
 	if parsed.AccessToken != "" {
-		return PollResult{Done: true, Tokens: &Tokens{
+		tokens := &Tokens{
 			AccessToken:  parsed.AccessToken,
 			RefreshToken: parsed.RefreshToken,
 			ExpiresIn:    parsed.ExpiresIn,
 			Scope:        parsed.Scope,
-		}}
+		}
+		c.FetchUserInfo(ctx, tokens)
+		return PollResult{Done: true, Tokens: tokens}
 	}
 
 	switch parsed.Error {
@@ -277,6 +286,65 @@ func mapTokenResponse(raw []byte) (*Tokens, error) {
 		ExpiresIn:    parsed.ExpiresIn,
 		Scope:        parsed.Scope,
 	}, nil
+}
+
+// FetchUserInfo calls the provider's userinfo endpoint to populate
+// Tokens.Email and Tokens.DisplayName.  Errors are logged but not fatal — the
+// account is still usable, just missing a human-readable label.
+func (c ProviderConfig) FetchUserInfo(ctx context.Context, t *Tokens) {
+	if c.UserInfoURL == "" || t.AccessToken == "" {
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.UserInfoURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+t.AccessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+
+	// Try common field names used by various providers:
+	//   Google/OIDC: { "email": "...", "name": "..." }
+	//   GitHub:      { "login": "...", "email": "...", "name": "..." }
+	//   Claude:      { "email": "...", "display_name": "..." }
+	var info struct {
+		Email           string `json:"email"`
+		Name            string `json:"name"`
+		DisplayName     string `json:"display_name"`
+		Login           string `json:"login"`
+		PreferredUser   string `json:"preferred_username"`
+		Sub             string `json:"sub"`
+	}
+	_ = json.Unmarshal(body, &info)
+
+	if t.Email == "" {
+		t.Email = info.Email
+	}
+	if t.DisplayName == "" {
+		t.DisplayName = info.DisplayName
+		if t.DisplayName == "" {
+			t.DisplayName = info.Name
+		}
+		if t.DisplayName == "" {
+			t.DisplayName = info.Login
+		}
+		if t.DisplayName == "" {
+			t.DisplayName = info.PreferredUser
+		}
+	}
 }
 
 func truncate(b []byte, max int) string {

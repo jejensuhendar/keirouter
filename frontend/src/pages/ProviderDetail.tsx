@@ -281,7 +281,7 @@ export function ProviderDetailPage() {
             <div className="flex items-center gap-2 border-t border-[var(--border)] px-6 py-3">
               <Button
                 variant="ghost"
-                onClick={() => enableModelsMut.mutate(models.data!.models!.map((m) => m.id))}
+                onClick={() => enableModelsMut.mutate((models.data?.models ?? []).map((m) => m.id))}
                 disabled={enableModelsMut.isPending}
               >
                 <ToggleRight className="h-4 w-4" />
@@ -289,7 +289,7 @@ export function ProviderDetailPage() {
               </Button>
               <Button
                 variant="ghost"
-                onClick={() => disableModelsMut.mutate(models.data!.models!.map((m) => m.id))}
+                onClick={() => disableModelsMut.mutate((models.data?.models ?? []).map((m) => m.id))}
                 disabled={disableModelsMut.isPending}
               >
                 <ToggleLeft className="h-4 w-4" />
@@ -646,7 +646,7 @@ function AddApiKeyModal({
                 onChange={(e) => onRegion(e.target.value)}
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm focus:border-accent-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40"
               >
-                {provider.regions!.map((r) => (
+                {(provider.regions ?? []).map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.label}
                   </option>

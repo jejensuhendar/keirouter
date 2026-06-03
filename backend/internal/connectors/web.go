@@ -35,7 +35,7 @@ func (c *WebConnector) Chat(ctx context.Context, req *core.ChatRequest, creds co
 }
 
 // Stream is unsupported on web connectors.
-func (c *WebConnector) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *WebConnector) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	return nil, &core.ProviderError{Kind: core.ErrBadRequest, Provider: c.id, Message: "provider does not support streaming"}
 }
 

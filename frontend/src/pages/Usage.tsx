@@ -71,7 +71,7 @@ export function UsagePage() {
 
       {insights.isLoading ? <Spinner />
         : insights.isError ? <ErrorCard message="Failed to load usage. Is the backend running?" />
-        : <UsageContent data={insights.data!} models={modelUsage.data?.models ?? []} />}
+        : insights.data ? <UsageContent data={insights.data} models={modelUsage.data?.models ?? []} /> : null}
     </>
   );
 }
@@ -591,6 +591,7 @@ function ModelUsageTable({ models }: { models: ModelUsage[] }) {
                 {th("prompt", "In Tok", "right")}
                 {th("completion", "Out Tok", "right")}
                 {th("cost", "Cost", "right")}
+                <th className="px-4 py-2 text-right font-medium text-[var(--text-muted)]">Rate ($/M)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
@@ -607,6 +608,15 @@ function ModelUsageTable({ models }: { models: ModelUsage[] }) {
                   <td className="px-4 py-2 text-right tabular-nums text-blue-500">{fmtNum(m.prompt_tokens)}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-green-500">{fmtNum(m.completion_tokens)}</td>
                   <td className="px-4 py-2 text-right tabular-nums font-medium">${m.cost_usd.toFixed(4)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-[var(--text-muted)]">
+                    {m.input_per_m != null ? (
+                      <span title={`In: $${m.input_per_m}/M · Out: $${m.output_per_m}/M${m.cached_input_per_m ? ` · Cached: $${m.cached_input_per_m}/M` : ""}`}>
+                        ${m.input_per_m}/{m.output_per_m}
+                      </span>
+                    ) : (
+                      <span className="opacity-40">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

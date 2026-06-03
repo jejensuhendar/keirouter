@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -85,7 +86,7 @@ func (c *OpenAIResponses) Chat(ctx context.Context, req *core.ChatRequest, creds
 }
 
 // Stream performs a streaming Responses call, reading the typed SSE event stream.
-func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -101,6 +102,9 @@ func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, cre
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -119,6 +123,10 @@ func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, cre
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():

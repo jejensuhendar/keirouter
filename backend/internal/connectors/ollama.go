@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -68,7 +69,7 @@ func (c *Ollama) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 
 // Stream performs a streaming /api/chat call. Ollama emits NDJSON, so each
 // scanned line is passed directly to the codec (no SSE "data:" framing).
-func (c *Ollama) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Ollama) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -86,6 +87,9 @@ func (c *Ollama) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 		defer close(out)
 		defer resp.Body.Close()
 
+		streamStart := time.Now()
+		ttftReported := false
+
 		scanner := sseScanner(resp.Body) // reuse the generous-buffer line scanner
 		for scanner.Scan() {
 			select {
@@ -101,6 +105,10 @@ func (c *Ollama) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():

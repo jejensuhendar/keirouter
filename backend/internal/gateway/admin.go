@@ -872,13 +872,14 @@ func (s *Server) adminUsageSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total_requests":    sum.TotalRequests,
-		"prompt_tokens":     sum.PromptTokens,
-		"completion_tokens": sum.CompletionTokens,
-		"cached_tokens":     sum.CachedTokens,
-		"cost_usd":          float64(sum.CostMicros) / 1_000_000,
-		"cache_hits":        sum.CacheHits,
-		"since":             since,
+		"total_requests":     sum.TotalRequests,
+		"prompt_tokens":      sum.PromptTokens,
+		"completion_tokens":  sum.CompletionTokens,
+		"cached_tokens":      sum.CachedTokens,
+		"cache_write_tokens": sum.CacheWriteTokens,
+		"cost_usd":           float64(sum.CostMicros) / 1_000_000,
+		"cache_hits":         sum.CacheHits,
+		"since":              since,
 	})
 }
 
@@ -1097,16 +1098,32 @@ func (s *Server) adminExportDatabase(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	export := map[string]any{}
 
-	// Export providers (accounts).
+	// Export providers (accounts) — includes encrypted credentials.
 	accs, _ := s.accounts.ListByTenant(ctx, adminTenant)
 	accountsOut := make([]map[string]any, 0, len(accs))
 	for _, a := range accs {
-		accountsOut = append(accountsOut, map[string]any{
+		out := map[string]any{
 			"id": a.ID, "provider": a.Provider, "label": a.Label,
 			"auth_kind": a.AuthKind, "priority": a.Priority,
 			"disabled": a.Disabled, "proxy_pool_id": a.ProxyPoolID,
 			"metadata": a.Metadata,
-		})
+		}
+		if a.SecretWrappedDEK != "" {
+			out["secret_wrapped_dek"] = a.SecretWrappedDEK
+			out["secret_ciphertext"] = a.SecretCiphertext
+		}
+		if a.TokenWrappedDEK != "" {
+			out["token_wrapped_dek"] = a.TokenWrappedDEK
+			out["token_ciphertext"] = a.TokenCiphertext
+		}
+		if a.RefreshWrappedDEK != "" {
+			out["refresh_wrapped_dek"] = a.RefreshWrappedDEK
+			out["refresh_ciphertext"] = a.RefreshCiphertext
+		}
+		if a.TokenExpiresAt != nil {
+			out["token_expires_at"] = a.TokenExpiresAt
+		}
+		accountsOut = append(accountsOut, out)
 	}
 	export["accounts"] = accountsOut
 
@@ -1181,6 +1198,61 @@ func (s *Server) adminImportDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	imported := 0
+
+	// Import providers (accounts) — preserves encrypted credentials.
+	if raw, ok := payload["accounts"]; ok {
+		var accounts []struct {
+			ID               string  `json:"id"`
+			Provider         string  `json:"provider"`
+			Label            string  `json:"label"`
+			AuthKind         string  `json:"auth_kind"`
+			Priority         int     `json:"priority"`
+			Disabled         bool    `json:"disabled"`
+			ProxyPoolID      string  `json:"proxy_pool_id"`
+			Metadata         string  `json:"metadata"`
+			SecretWrappedDEK string  `json:"secret_wrapped_dek"`
+			SecretCiphertext string  `json:"secret_ciphertext"`
+			TokenWrappedDEK  string  `json:"token_wrapped_dek"`
+			TokenCiphertext  string  `json:"token_ciphertext"`
+			RefreshWrappedDEK string `json:"refresh_wrapped_dek"`
+			RefreshCiphertext string `json:"refresh_ciphertext"`
+			TokenExpiresAt   *string `json:"token_expires_at"`
+		}
+		if err := json.Unmarshal(raw, &accounts); err == nil {
+			for _, a := range accounts {
+				now := time.Now()
+				var expiresAt *time.Time
+				if a.TokenExpiresAt != nil {
+					if t, err := time.Parse(time.RFC3339, *a.TokenExpiresAt); err == nil {
+						expiresAt = &t
+					}
+				}
+				acc := store.Account{
+					ID:                defaultStr(a.ID, uuid.NewString()),
+					TenantID:          adminTenant,
+					Provider:          a.Provider,
+					Label:             a.Label,
+					AuthKind:          store.AuthKind(defaultStr(a.AuthKind, "api_key")),
+					SecretWrappedDEK:  a.SecretWrappedDEK,
+					SecretCiphertext:  a.SecretCiphertext,
+					TokenWrappedDEK:   a.TokenWrappedDEK,
+					TokenCiphertext:   a.TokenCiphertext,
+					RefreshWrappedDEK: a.RefreshWrappedDEK,
+					RefreshCiphertext: a.RefreshCiphertext,
+					TokenExpiresAt:    expiresAt,
+					Metadata:          a.Metadata,
+					Priority:          defaultInt(a.Priority, 100),
+					Disabled:          a.Disabled,
+					ProxyPoolID:       a.ProxyPoolID,
+					CreatedAt:         now,
+					UpdatedAt:         now,
+				}
+				if err := s.accounts.Create(ctx, acc); err == nil {
+					imported++
+				}
+			}
+		}
+	}
 
 	// Import chains.
 	if raw, ok := payload["chains"]; ok {

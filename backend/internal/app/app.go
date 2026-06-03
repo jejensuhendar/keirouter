@@ -87,7 +87,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	}
 
 	pricing := buildPricing()
-	mtr := meter.New(db.Usage(), pricing)
+	modelPrices := buildModelPrices()
+	mtr := meter.New(db.Usage(), pricing, modelPrices)
 	bud := budget.New(db.Budgets(), db.Usage())
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
@@ -299,4 +300,19 @@ func buildPricing() map[string]meter.Price {
 		prices = append(prices, meter.SpecPrice{ID: s.ID, InputPerM: s.InputPerM, OutputPerM: s.OutputPerM})
 	}
 	return meter.PricingFromCatalog(prices)
+}
+
+// buildModelPrices builds the per-model pricing table from the connector model prices.
+func buildModelPrices() map[string]meter.Price {
+	out := make(map[string]meter.Price)
+	for _, mp := range connectors.ModelPricingTable() {
+		out[mp.Provider+"/"+mp.Model] = meter.Price{
+			InputPerM:       mp.InputPerM,
+			OutputPerM:      mp.OutputPerM,
+			CachedInputPerM: mp.CachedInputPerM,
+			CacheWritePerM:  mp.CacheWritePerM,
+			ReasoningPerM:   mp.ReasoningPerM,
+		}
+	}
+	return out
 }

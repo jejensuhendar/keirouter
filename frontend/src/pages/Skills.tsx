@@ -130,7 +130,7 @@ export function SkillsPage() {
           <CardHeader title="Custom skills" />
           {skills.isLoading ? (
             <Spinner />
-          ) : !skills.data?.skills.length ? (
+          ) : !skills.data?.skills?.length ? (
             <EmptyState title="No custom skills yet" hint="Create a skill to augment matching requests with a system prompt." />
           ) : (
             <div className="divide-y divide-[var(--border)]">
@@ -152,7 +152,7 @@ export function SkillsPage() {
 
 function ReferenceSkillRow({ skill }: { skill: { id: string; name: string; endpoint: string | null; description: string } }) {
   const [copied, setCopied] = useState(false);
-  const url = `https://raw.githubusercontent.com/user/keirouter/main/skills/${skill.id}/SKILL.md`;
+  const url = `https://raw.githubusercontent.com/mydisha/keirouter/main/skills/${skill.id}/SKILL.md`;
 
   const copy = () => {
     navigator.clipboard.writeText(url);

@@ -291,11 +291,18 @@ type streamParser interface {
 // channel. It owns resp.Body and closes it when done. Shared by the
 // OpenAI-compatible subscription connectors (Qwen, iFlow, ...) to avoid
 // duplicating the streaming goroutine.
-func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Response, codec streamParser) <-chan core.StreamChunk {
+//
+// onFirstChunk, if non-nil, is called once when the first meaningful chunk
+// (text, thinking, or tool_call) arrives. The elapsed duration is measured
+// from when the goroutine starts scanning.
+func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Response, codec streamParser, onFirstChunk func(time.Duration)) <-chan core.StreamChunk {
 	out := make(chan core.StreamChunk, 16)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -314,6 +321,10 @@ func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Respo
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && onFirstChunk != nil {
+					ttftReported = true
+					onFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():
@@ -329,6 +340,22 @@ func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Respo
 		}
 	}()
 	return out
+}
+
+// isMeaningfulChunk reports whether a stream chunk represents actual model
+// output (text, thinking, or a tool call with an ID). Usage, finish, ping,
+// and incremental tool-call argument deltas are not meaningful for TTFT.
+func isMeaningfulChunk(ch core.StreamChunk) bool {
+	switch ch.Type {
+	case core.ChunkText:
+		return ch.Delta != ""
+	case core.ChunkThinking:
+		return ch.Delta != ""
+	case core.ChunkToolCall:
+		return ch.ToolCall != nil && ch.ToolCall.ID != ""
+	default:
+		return false
+	}
 }
 
 // sseScanner returns a bufio.Scanner configured for SSE: it reads one logical

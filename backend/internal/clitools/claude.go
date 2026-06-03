@@ -45,7 +45,9 @@ func (t *ClaudeTool) Configure(homeDir, baseURL, apiKey string, models []string)
 	if env == nil {
 		env = make(map[string]any)
 	}
-	env["ANTHROPIC_BASE_URL"] = ensureSuffix(baseURL, "/v1")
+	// The Anthropic SDK appends /v1/messages to ANTHROPIC_BASE_URL, so we must
+	// NOT include /v1 in the base URL to avoid double /v1/v1/messages.
+	env["ANTHROPIC_BASE_URL"] = stripSuffix(baseURL, "/v1")
 	env["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	if len(models) >= 1 {
 		env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = models[0]

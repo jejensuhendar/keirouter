@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -78,7 +79,7 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 }
 
 // Stream performs a streaming completion, emitting canonical chunks.
-func (c *OpenAICompatible) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *OpenAICompatible) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -95,6 +96,9 @@ func (c *OpenAICompatible) Stream(ctx context.Context, req *core.ChatRequest, cr
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -114,6 +118,10 @@ func (c *OpenAICompatible) Stream(ctx context.Context, req *core.ChatRequest, cr
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():

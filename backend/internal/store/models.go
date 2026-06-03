@@ -107,6 +107,7 @@ type UsageRecord struct {
 	PromptTokens     int
 	CompletionTokens int
 	CachedTokens     int
+	CacheWriteTokens int
 	CostMicros       int64
 	CacheHit         bool
 	LatencyMS        int

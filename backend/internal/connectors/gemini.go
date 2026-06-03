@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"net/url"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -80,7 +81,7 @@ func (c *Gemini) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 // Stream performs a streaming streamGenerateContent call. Gemini emits SSE when
 // asked with ?alt=sse; each data line is a partial generateContent response
 // that the codec maps to canonical chunks.
-func (c *Gemini) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Gemini) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -97,6 +98,9 @@ func (c *Gemini) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -115,6 +119,10 @@ func (c *Gemini) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():

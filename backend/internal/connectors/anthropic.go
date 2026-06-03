@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -110,7 +111,7 @@ func (c *Anthropic) Validate(ctx context.Context, creds core.Credentials) error 
 
 // Stream performs a streaming completion. Anthropic emits named SSE events; the
 // codec maps each event's data payload to canonical chunks.
-func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -129,6 +130,9 @@ func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds cor
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
+
+		streamStart := time.Now()
+		ttftReported := false
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -152,6 +156,10 @@ func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds cor
 					if orig, ok := toolNameMap[ch.ToolCall.Name]; ok {
 						ch.ToolCall.Name = orig
 					}
+				}
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
 				}
 				select {
 				case out <- ch:

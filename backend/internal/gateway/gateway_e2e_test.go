@@ -80,7 +80,7 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc) *e2eHarness {
 	// Wire pipeline + gateway.
 	connRegistry := connectors.DefaultRegistry()
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
-	mtr := meter.New(db.Usage(), nil)
+	mtr := meter.New(db.Usage(), nil, nil)
 	bud := budget.New(db.Budgets(), db.Usage())
 	pipe := pipeline.New(pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud})
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -118,7 +119,7 @@ func (c *Cursor) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 // Stream performs a Cursor call and emits canonical chunks. Cursor returns the
 // whole framed protobuf response (not incremental SSE), so the connector reads
 // it fully then replays decoded frames as chunks.
-func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	results, err := c.do(ctx, req, creds)
 	if err != nil {
 		return nil, err
@@ -127,8 +128,19 @@ func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 	out := make(chan core.StreamChunk, 16)
 	go func() {
 		defer close(out)
+
+		streamStart := time.Now()
+		ttftReported := false
+
 		seen := map[string]bool{}
 		hadTool := false
+
+		reportTTFT := func(ch core.StreamChunk) {
+			if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+				ttftReported = true
+				cfg.OnFirstChunk(time.Since(streamStart))
+			}
+		}
 
 		emit := func(ch core.StreamChunk) bool {
 			select {
@@ -146,21 +158,29 @@ func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 				tc := r.toolCall
 				if !seen[tc.id] {
 					seen[tc.id] = true
-					if !emit(core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Name: tc.name, Arguments: json.RawMessage("")}}) {
+					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Name: tc.name, Arguments: json.RawMessage("")}}
+					reportTTFT(ch)
+					if !emit(ch) {
 						return
 					}
 				}
 				if tc.args != "" && tc.args != "{}" {
-					if !emit(core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Arguments: json.RawMessage(tc.args)}}) {
+					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Arguments: json.RawMessage(tc.args)}}
+					reportTTFT(ch)
+					if !emit(ch) {
 						return
 					}
 				}
 			case r.thinking != "":
-				if !emit(core.StreamChunk{Type: core.ChunkThinking, Delta: r.thinking}) {
+				ch := core.StreamChunk{Type: core.ChunkThinking, Delta: r.thinking}
+				reportTTFT(ch)
+				if !emit(ch) {
 					return
 				}
 			case r.text != "":
-				if !emit(core.StreamChunk{Type: core.ChunkText, Delta: r.text}) {
+				ch := core.StreamChunk{Type: core.ChunkText, Delta: r.text}
+				reportTTFT(ch)
+				if !emit(ch) {
 					return
 				}
 			}

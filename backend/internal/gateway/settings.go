@@ -27,7 +27,8 @@ type EndpointSettings struct {
 
 	// TerseEnabled toggles terse mode, which serializes messages and tools into
 	// the compact TERSE format for token-efficient context.
-	TerseEnabled bool `json:"terse_enabled"`
+	TerseEnabled bool   `json:"terse_enabled"`
+	TerseLevel   string `json:"terse_level"`
 
 	// Routing strategy fields (mirrors 9router).
 	RoutingStrategy     string `json:"routing_strategy"`      // "fill-first" | "round-robin"
@@ -51,6 +52,7 @@ func defaultEndpointSettings() EndpointSettings {
 		CavemanEnabled:       false,
 		CavemanLevel:         string(caveman.LevelFull),
 		TerseEnabled:         false,
+		TerseLevel:           "medium",
 		RoutingStrategy:      "fill-first",
 		StickyLimit:          3,
 		ComboStrategy:        "fallback",
@@ -79,6 +81,9 @@ func (s *Server) loadEndpointSettings(ctx context.Context) EndpointSettings {
 	// Backfill empty levels with defaults.
 	if es.CavemanLevel == "" {
 		es.CavemanLevel = def.CavemanLevel
+	}
+	if es.TerseLevel == "" {
+		es.TerseLevel = def.TerseLevel
 	}
 	if es.RoutingStrategy == "" {
 		es.RoutingStrategy = def.RoutingStrategy
@@ -134,6 +139,7 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		CavemanEnabled       *bool   `json:"caveman_enabled"`
 		CavemanLevel         *string `json:"caveman_level"`
 		TerseEnabled         *bool   `json:"terse_enabled"`
+		TerseLevel           *string `json:"terse_level"`
 		RoutingStrategy      *string `json:"routing_strategy"`
 		StickyLimit          *int    `json:"sticky_limit"`
 		ComboStrategy        *string `json:"combo_strategy"`
@@ -163,6 +169,9 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 	if patch.TerseEnabled != nil {
 		current.TerseEnabled = *patch.TerseEnabled
 	}
+	if patch.TerseLevel != nil {
+		current.TerseLevel = *patch.TerseLevel
+	}
 	if patch.RoutingStrategy != nil {
 		current.RoutingStrategy = *patch.RoutingStrategy
 	}
@@ -186,6 +195,19 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if patch.ObservabilityEnabled != nil {
 		current.ObservabilityEnabled = patch.ObservabilityEnabled
+	}
+
+	// Enforce mutual exclusion: caveman and terse both inject system-prompt
+	// directives that conflict, so only one can be active. The last toggle
+	// set wins (frontend sends both fields; the one being enabled is the
+	// "winner"). As a safety net for direct API callers, if both end up
+	// enabled, disable the one that wasn't explicitly set in this patch.
+	if current.CavemanEnabled && current.TerseEnabled {
+		if patch.TerseEnabled != nil && *patch.TerseEnabled {
+			current.CavemanEnabled = false
+		} else {
+			current.TerseEnabled = false
+		}
 	}
 
 	raw, err := json.Marshal(current)

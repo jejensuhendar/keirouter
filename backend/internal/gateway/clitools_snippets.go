@@ -48,6 +48,9 @@ func generateSnippets(baseURL, model, apiKey string) []cliToolSnippet {
 // ---- individual tool snippets -----------------------------------------------
 
 func snippetClaude(baseURL, apiKey, model string) cliToolSnippet {
+	// The Anthropic SDK appends /v1/messages to ANTHROPIC_BASE_URL, so we must
+	// strip the /v1 suffix to avoid double /v1/v1/messages.
+	claudeBaseURL := strings.TrimSuffix(baseURL, "/v1")
 	snippet := fmt.Sprintf(`# ~/.claude/settings.json
 {
   "hasCompletedOnboarding": true,
@@ -55,7 +58,7 @@ func snippetClaude(baseURL, apiKey, model string) cliToolSnippet {
     "ANTHROPIC_BASE_URL": "%s",
     "ANTHROPIC_AUTH_TOKEN": "%s"
   }
-}`, baseURL, apiKey)
+}`, claudeBaseURL, apiKey)
 	return cliToolSnippet{
 		ID:           "claude",
 		Name:         "Claude Code",

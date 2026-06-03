@@ -21,9 +21,10 @@ type gemStreamChunk struct {
 		FinishReason string     `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata *struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
 }
 
@@ -71,6 +72,7 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 				PromptTokens:     raw.UsageMetadata.PromptTokenCount,
 				CompletionTokens: raw.UsageMetadata.CandidatesTokenCount,
 				TotalTokens:      raw.UsageMetadata.TotalTokenCount,
+				CachedTokens:     raw.UsageMetadata.CachedContentTokenCount,
 			},
 		})
 	}

@@ -58,43 +58,60 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core.Dialect) {
 	key, _ := authedKey(r.Context())
 	tenantID := tenantOf(key)
+	client := detectClient(r)
+
+	s.consoleLog.Logf("DEBUG", "→ %s %s · dialect=%s · client=%s · key=%s",
+		r.Method, r.URL.Path, dialect, client, key.ID)
 
 	codec, err := s.codecs.Codec(dialect)
 	if err != nil {
+		s.consoleLog.Logf("ERROR", "unsupported dialect: %s", dialect)
 		writeError(w, http.StatusInternalServerError, "unsupported dialect")
 		return
 	}
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
+		s.consoleLog.Logf("ERROR", "failed to read body: %v", err)
 		writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
+	s.consoleLog.Logf("DEBUG", "  body read: %d bytes", len(body))
 
 	req, err := codec.ParseRequest(body)
 	if err != nil {
+		s.consoleLog.Logf("ERROR", "parse failed: %v", err)
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
 
 	// Attach routing metadata.
 	req.Metadata = core.RequestMetadata{
-		ClientKind:    detectClient(r),
+		ClientKind:    client,
 		SourceDialect: dialect,
 		APIKeyID:      key.ID,
 		TenantID:      tenantID,
 		ProjectID:     key.ProjectID,
 	}
 
+	s.consoleLog.Logf("DEBUG", "  model=%s · stream=%v · messages=%d · tenant=%s",
+		req.Model, req.Stream, len(req.Messages), tenantID)
+
 	targets, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {
+			s.consoleLog.Logf("WARN", "bad model: %s", bad.Error())
 			writeError(w, http.StatusBadRequest, bad.Error())
 			return
 		}
+		s.consoleLog.Logf("ERROR", "resolve targets failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to resolve model")
 		return
+	}
+
+	for i, t := range targets {
+		s.consoleLog.Logf("DEBUG", "  target[%d]: %s/%s", i, t.Provider, t.Model)
 	}
 
 	opts := pipeline.Options{
@@ -105,18 +122,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	}
 
 	if req.Stream {
+		s.consoleLog.Logf("DEBUG", "  entering stream path")
 		s.streamChat(w, r, codec, req, opts)
 		return
 	}
+	s.consoleLog.Logf("DEBUG", "  entering unary path")
 	s.unaryChat(w, r, codec, req, opts)
 }
 
 // unaryChat runs a non-streaming request and renders the response.
 func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options) {
 	start := time.Now()
+	s.consoleLog.Logf("DEBUG", "  ▶ pipeline.Chat() start")
 	result, err := s.pipeline.Chat(r.Context(), req, opts)
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
+		s.consoleLog.Logf("ERROR", "  ✖ pipeline.Chat() failed after %dms: %v", latency, err)
 		s.logRequest(req.Model, req.Model, 0, 0, latency, false, err)
 		s.writeProviderError(w, err)
 		return
@@ -124,10 +145,13 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 
 	out, err := codec.RenderResponse(result.Response)
 	if err != nil {
+		s.consoleLog.Logf("ERROR", "  ✖ render failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to render response")
 		return
 	}
 	tokens := result.Response.Usage.PromptTokens + result.Response.Usage.CompletionTokens
+	s.consoleLog.Logf("DEBUG", "  ✔ %s/%s · %d tok · acct=%s · cache=%v · %dms",
+		result.Provider, result.Model, tokens, result.AccountID, result.CacheHit, latency)
 	s.logRequest(result.Provider, result.Model, tokens, result.CostMicros, latency, result.CacheHit, nil)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-KeiRouter-Provider", result.Provider)
@@ -155,13 +179,17 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	}
 
 	start := time.Now()
+	s.consoleLog.Logf("DEBUG", "  ▶ pipeline.Stream() start")
 	result, err := s.pipeline.Stream(r.Context(), req, opts)
 	if err != nil {
 		latency := int(time.Since(start).Milliseconds())
+		s.consoleLog.Logf("ERROR", "  ✖ pipeline.Stream() failed after %dms: %v", latency, err)
 		s.logRequest(req.Model, req.Model, 0, 0, latency, false, err)
 		s.writeProviderError(w, err)
 		return
 	}
+	s.consoleLog.Logf("DEBUG", "  ✔ stream connected: %s/%s · acct=%s",
+		result.Provider, result.Model, result.AccountID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -174,25 +202,39 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	state := &transform.StreamState{Model: result.Model}
 	streamStart := time.Now()
 	var totalTokens int
+	var chunkCount int
 
-	for chunk := range result.Chunks {
-		if chunk.Type == core.ChunkError {
-			// Best-effort: surface a terminal error event then stop.
-			s.log.Warn("stream error", "err", chunk.Err)
-			break
-		}
-		events, rerr := streamCodec.RenderStreamChunk(chunk, state)
+	// ToolArgSanitizer buffers streaming tool call arguments and emits
+	// sanitized JSON when each tool call completes. This fixes malformed
+	// arguments from non-Anthropic models (e.g., Read.limit as string).
+	sanitizer := transform.NewToolArgSanitizer()
+	renderChunk := func(cleaned core.StreamChunk) {
+		events, rerr := streamCodec.RenderStreamChunk(cleaned, state)
 		if rerr != nil {
 			s.log.Warn("failed to render stream chunk", "err", rerr)
-			continue
+			return
 		}
 		for _, ev := range events {
 			if _, werr := w.Write(ev); werr != nil {
-				return // client disconnected
+				s.consoleLog.Logf("WARN", "  client disconnected after %d chunks", chunkCount)
+				return
 			}
 		}
 		flusher.Flush()
 	}
+
+	for chunk := range result.Chunks {
+		if chunk.Type == core.ChunkError {
+			s.consoleLog.Logf("ERROR", "  ✖ stream chunk error: %v", chunk.Err)
+			s.log.Warn("stream error", "err", chunk.Err)
+			break
+		}
+		chunkCount++
+		sanitizer.Process(chunk, renderChunk)
+	}
+
+	// Flush any remaining buffered tool calls.
+	sanitizer.Flush(renderChunk)
 
 	for _, ev := range streamCodec.RenderStreamDone(state) {
 		_, _ = w.Write(ev)
@@ -200,6 +242,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	flusher.Flush()
 
 	latency := int(time.Since(streamStart).Milliseconds())
+	s.consoleLog.Logf("DEBUG", "  ✔ stream done: %d chunks · %d tok · %dms", chunkCount, totalTokens, latency)
 	s.logRequest(result.Provider, result.Model, totalTokens, 0, latency, false, nil)
 }
 

@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -67,7 +68,7 @@ func (c *CommandCode) Chat(ctx context.Context, req *core.ChatRequest, creds cor
 
 // Stream performs a streaming generate call. Command Code emits NDJSON, so each
 // scanned line is passed directly to the codec (no SSE "data:" framing).
-func (c *CommandCode) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (<-chan core.StreamChunk, error) {
+func (c *CommandCode) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
@@ -84,6 +85,9 @@ func (c *CommandCode) Stream(ctx context.Context, req *core.ChatRequest, creds c
 		defer close(out)
 		defer resp.Body.Close()
 
+		streamStart := time.Now()
+		ttftReported := false
+
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
 			select {
@@ -99,6 +103,10 @@ func (c *CommandCode) Stream(ctx context.Context, req *core.ChatRequest, creds c
 				continue
 			}
 			for _, ch := range chunks {
+				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
+					ttftReported = true
+					cfg.OnFirstChunk(time.Since(streamStart))
+				}
 				select {
 				case out <- ch:
 				case <-ctx.Done():
