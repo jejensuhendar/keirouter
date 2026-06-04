@@ -130,13 +130,14 @@ const (
 	ScopeAPIKey  BudgetScope = "api_key"
 )
 
-// Budget enforces a spend limit over a period.
+// Budget enforces a spend and/or token limit over a period.
 type Budget struct {
 	ID          string
 	TenantID    string
 	ScopeKind   BudgetScope
 	ScopeID     string
 	LimitMicros int64
+	LimitTokens int64  // 0 = no token limit
 	Period      string
 	AlertPct    int
 	HardCutoff  bool
@@ -152,6 +153,14 @@ type AuditEntry struct {
 	Action    string
 	Target    string
 	Detail    string
+	CreatedAt time.Time
+}
+
+// APIKeyModelAccess is a single allowed-model row for per-key model gating.
+// When rows exist for a key, only listed models are permitted.
+type APIKeyModelAccess struct {
+	APIKeyID  string
+	Model     string
 	CreatedAt time.Time
 }
 

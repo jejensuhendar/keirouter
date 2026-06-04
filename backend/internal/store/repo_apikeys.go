@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -154,4 +155,97 @@ func (r *APIKeyRepo) scanRows(rows *sql.Rows) (APIKey, error) {
 		k.LastUsedAt = &t
 	}
 	return k, nil
+}
+
+// ---- per-key model access ---------------------------------------------------
+
+// SetAllowedModels replaces the allowed-models list for an API key. An empty
+// slice removes all restrictions (all models allowed).
+func (r *APIKeyRepo) SetAllowedModels(ctx context.Context, keyID string, models []string) error {
+	tx, err := r.db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: set allowed models begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	dq := r.db.rebind(`DELETE FROM api_key_model_access WHERE api_key_id = ?`)
+	if _, err := tx.ExecContext(ctx, dq, keyID); err != nil {
+		return fmt.Errorf("store: set allowed models delete: %w", err)
+	}
+
+	if len(models) > 0 {
+		now := formatTime(time.Now())
+		iq := r.db.rebind(`INSERT INTO api_key_model_access (api_key_id, model, created_at) VALUES (?, ?, ?)`)
+		for _, m := range models {
+			if _, err := tx.ExecContext(ctx, iq, keyID, m, now); err != nil {
+				return fmt.Errorf("store: set allowed models insert: %w", err)
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// GetAllowedModels returns the models allowed for a key. Empty slice means no
+// restriction (all models permitted).
+func (r *APIKeyRepo) GetAllowedModels(ctx context.Context, keyID string) ([]string, error) {
+	q := r.db.rebind(`SELECT model FROM api_key_model_access WHERE api_key_id = ? ORDER BY model`)
+	rows, err := r.db.sql.QueryContext(ctx, q, keyID)
+	if err != nil {
+		return nil, fmt.Errorf("store: get allowed models: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// IsModelAllowed reports whether a model is permitted for the given key. When
+// no restriction rows exist, all models are allowed. Supports prefix wildcard
+// matching: a stored pattern "claude-*" matches "claude-opus-4-6".
+func (r *APIKeyRepo) IsModelAllowed(ctx context.Context, keyID string, model string) (bool, error) {
+	allowed, err := r.GetAllowedModels(ctx, keyID)
+	if err != nil {
+		return false, err
+	}
+	if len(allowed) == 0 {
+		return true, nil // no restriction
+	}
+	lower := strings.ToLower(model)
+	for _, pattern := range allowed {
+		lp := strings.ToLower(pattern)
+		if strings.HasSuffix(lp, "*") {
+			prefix := lp[:len(lp)-1]
+			if strings.HasPrefix(lower, prefix) {
+				return true, nil
+			}
+		} else if lp == lower {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SetAllowedModelsOnTx replaces allowed models within an existing transaction.
+func (r *APIKeyRepo) SetAllowedModelsOnTx(ctx context.Context, tx *sql.Tx, keyID string, models []string) error {
+	dq := r.db.rebind(`DELETE FROM api_key_model_access WHERE api_key_id = ?`)
+	if _, err := tx.ExecContext(ctx, dq, keyID); err != nil {
+		return fmt.Errorf("store: set allowed models delete: %w", err)
+	}
+	if len(models) > 0 {
+		now := formatTime(time.Now())
+		iq := r.db.rebind(`INSERT INTO api_key_model_access (api_key_id, model, created_at) VALUES (?, ?, ?)`)
+		for _, m := range models {
+			if _, err := tx.ExecContext(ctx, iq, keyID, m, now); err != nil {
+				return fmt.Errorf("store: set allowed models insert: %w", err)
+			}
+		}
+	}
+	return nil
 }

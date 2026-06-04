@@ -75,6 +75,7 @@ export interface APIKey {
   display: string;
   disabled: boolean;
   created_at: string;
+  allowed_models?: string[];
 }
 
 export interface CreatedKey {
@@ -86,10 +87,12 @@ export interface CreatedKey {
     id: string;
     scope_kind: string;
     limit_micros: number;
+    limit_tokens: number;
     period: string;
     alert_pct: number;
     hard_cutoff: boolean;
   };
+  allowed_models?: string[];
 }
 
 export interface Account {
@@ -121,6 +124,7 @@ export interface Budget {
   scope_kind: string;
   scope_id: string;
   limit_micros: number;
+  limit_tokens: number;
   period: string;
   alert_pct: number;
   hard_cutoff: boolean;
@@ -132,11 +136,14 @@ export interface BudgetStatus {
   scope_id: string;
   scope_name: string;
   limit_micros: number;
+  limit_tokens: number;
   period: string;
   alert_pct: number;
   hard_cutoff: boolean;
   spent_micros: number;
+  spent_tokens: number;
   pct_used: number;
+  tokens_pct_used: number;
   period_start: string;
 }
 
@@ -418,10 +425,17 @@ export const api = {
     request<{ models: { id: string; name: string; kind: string }[] }>("GET", `/providers/${id}/models`),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
-  createKey: (name: string, budget?: { budget_limit_usd: number; budget_period?: string; budget_alert_pct?: number; budget_hard_cutoff?: boolean }) =>
-    request<CreatedKey>("POST", "/keys", { name, ...(budget ? budget : {}) }),
-  updateKey: (id: string, patch: { disabled: boolean }) =>
-    request<{ id: string; disabled: boolean }>("PATCH", `/keys/${id}`, patch),
+  createKey: (name: string, opts?: {
+    budget_limit_usd?: number;
+    budget_limit_tokens?: number;
+    budget_period?: string;
+    budget_alert_pct?: number;
+    budget_hard_cutoff?: boolean;
+    allowed_models?: string[];
+  }) =>
+    request<CreatedKey>("POST", "/keys", { name, ...(opts ? opts : {}) }),
+  updateKey: (id: string, patch: { disabled?: boolean; allowed_models?: string[] }) =>
+    request<{ id: string; disabled?: boolean; allowed_models?: string[] }>("PATCH", `/keys/${id}`, patch),
   deleteKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
 
   listAccounts: () => request<{ accounts: Account[] }>("GET", "/accounts"),
@@ -448,9 +462,9 @@ export const api = {
 
   listBudgets: () => request<{ budgets: Budget[] }>("GET", "/budgets"),
   budgetStatus: () => request<{ budgets: BudgetStatus[] }>("GET", "/budgets/status"),
-  createBudget: (input: { scope_kind?: string; scope_id?: string; limit_usd: number; period?: string; alert_pct?: number; hard_cutoff?: boolean }) =>
+  createBudget: (input: { scope_kind?: string; scope_id?: string; limit_usd?: number; limit_tokens?: number; period?: string; alert_pct?: number; hard_cutoff?: boolean }) =>
     request<{ id: string }>("POST", "/budgets", input),
-  updateBudget: (id: string, patch: { limit_usd?: number; period?: string; alert_pct?: number; hard_cutoff?: boolean }) =>
+  updateBudget: (id: string, patch: { limit_usd?: number; limit_tokens?: number; period?: string; alert_pct?: number; hard_cutoff?: boolean }) =>
     request<void>("PATCH", `/budgets/${id}`, patch),
   deleteBudget: (id: string) => request<void>("DELETE", `/budgets/${id}`),
 

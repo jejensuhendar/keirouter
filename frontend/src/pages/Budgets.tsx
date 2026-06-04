@@ -29,6 +29,13 @@ function microsToUSD(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toString();
+}
+
 function progressColor(pct: number, alertPct: number): string {
   if (pct >= 100) return "bg-red-500";
   if (pct >= alertPct) return "bg-amber-500";
@@ -92,7 +99,8 @@ export function BudgetsPage() {
               </p>
               <p className="text-xs text-red-600 dark:text-red-400">
                 {budgets
-                  .filter((b) => b.pct_used >= 100 && b.hard_cutoff)
+                  .filter((b) => (b.limit_micros > 0 && b.pct_used >= 100) || (b.limit_tokens > 0 && b.tokens_pct_used >= 100))
+                  .filter((b) => b.hard_cutoff)
                   .map((b) => `${b.scope_name} (${b.period})`)
                   .join(", ")}
               </p>
@@ -101,7 +109,11 @@ export function BudgetsPage() {
         </Card>
       )}
 
-      {budgets.some((b) => b.pct_used >= b.alert_pct && b.pct_used < 100) && (
+      {budgets.some((b) => {
+        const usdAlert = b.limit_micros > 0 && b.pct_used >= b.alert_pct && b.pct_used < 100;
+        const tokAlert = b.limit_tokens > 0 && b.tokens_pct_used >= b.alert_pct && b.tokens_pct_used < 100;
+        return usdAlert || tokAlert;
+      }) && (
         <Card className="mb-6 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
           <div className="flex items-center gap-3 px-6 py-4">
             <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
@@ -111,8 +123,17 @@ export function BudgetsPage() {
               </p>
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 {budgets
-                  .filter((b) => b.pct_used >= b.alert_pct && b.pct_used < 100)
-                  .map((b) => `${b.scope_name}: ${b.pct_used.toFixed(0)}% used`)
+                  .filter((b) => {
+                    const usdAlert = b.limit_micros > 0 && b.pct_used >= b.alert_pct && b.pct_used < 100;
+                    const tokAlert = b.limit_tokens > 0 && b.tokens_pct_used >= b.alert_pct && b.tokens_pct_used < 100;
+                    return usdAlert || tokAlert;
+                  })
+                  .map((b) => {
+                    const parts = [];
+                    if (b.limit_micros > 0) parts.push(`$${b.pct_used.toFixed(0)}%`);
+                    if (b.limit_tokens > 0) parts.push(`tok ${b.tokens_pct_used.toFixed(0)}%`);
+                    return `${b.scope_name}: ${parts.join(" / ")}`;
+                  })
                   .join(", ")}
               </p>
             </div>
@@ -192,7 +213,12 @@ function BudgetRow({
         <div className="min-w-0 flex-1">
           {/* Header badges */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{microsToUSD(b.limit_micros)}</span>
+              <span className="text-sm font-medium">
+                {b.limit_micros > 0 ? microsToUSD(b.limit_micros) : "—"}
+                {b.limit_tokens > 0 && (
+                  <span className="ml-2 text-[var(--text-muted)]">{formatTokens(b.limit_tokens)} tok</span>
+                )}
+              </span>
             <Badge>{b.period}</Badge>
             <Badge tone={b.scope_kind === "api_key" ? "accent" : "neutral"}>
               {b.scope_kind === "api_key" ? (
@@ -217,38 +243,62 @@ function BudgetRow({
             )}
           </div>
 
-          {/* Progress bar */}
-          <div className="mt-3">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-[var(--text-muted)]">
-                {microsToUSD(b.spent_micros)} spent
-              </span>
-              <span className={overLimit ? "font-medium text-red-600 dark:text-red-400" : "text-[var(--text-muted)]"}>
-                {b.pct_used.toFixed(1)}% used
-              </span>
+          {/* USD Progress bar */}
+          {b.limit_micros > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--text-muted)]">
+                  {microsToUSD(b.spent_micros)} spent
+                </span>
+                <span className={overLimit ? "font-medium text-red-600 dark:text-red-400" : "text-[var(--text-muted)]"}>
+                  {b.pct_used.toFixed(1)}% used
+                </span>
+              </div>
+              <div className="mt-1.5 relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-amber-400/60 z-10"
+                  style={{ left: `${Math.min(b.alert_pct, 100)}%` }}
+                  title={`Alert at ${b.alert_pct}%`}
+                />
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${progressColor(b.pct_used, b.alert_pct)}`}
+                  style={{ width: `${Math.min(b.pct_used, 100)}%` }}
+                />
+              </div>
+              <div className="mt-1.5 flex items-center justify-between text-xs text-[var(--text-muted)]">
+                <span>{microsToUSD(remaining)} remaining</span>
+                <span>alert at {b.alert_pct}%</span>
+              </div>
             </div>
-            <div className="mt-1.5 relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
-              {/* Alert threshold marker */}
-              <div
-                className="absolute top-0 bottom-0 w-px bg-amber-400/60 z-10"
-                style={{ left: `${Math.min(b.alert_pct, 100)}%` }}
-                title={`Alert at ${b.alert_pct}%`}
-              />
-              {/* Spend bar */}
-              <div
-                className={`h-full rounded-full transition-all duration-700 ${progressColor(b.pct_used, b.alert_pct)}`}
-                style={{ width: `${Math.min(b.pct_used, 100)}%` }}
-              />
+          )}
+          {/* Token Progress bar */}
+          {b.limit_tokens > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[var(--text-muted)]">
+                  {formatTokens(b.spent_tokens)} tokens used
+                </span>
+                <span className={b.tokens_pct_used >= 100 ? "font-medium text-red-600 dark:text-red-400" : "text-[var(--text-muted)]"}>
+                  {b.tokens_pct_used.toFixed(1)}% used
+                </span>
+              </div>
+              <div className="mt-1.5 relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-amber-400/60 z-10"
+                  style={{ left: `${Math.min(b.alert_pct, 100)}%` }}
+                  title={`Alert at ${b.alert_pct}%`}
+                />
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${progressColor(b.tokens_pct_used, b.alert_pct)}`}
+                  style={{ width: `${Math.min(b.tokens_pct_used, 100)}%` }}
+                />
+              </div>
+              <div className="mt-1.5 flex items-center justify-between text-xs text-[var(--text-muted)]">
+                <span>{formatTokens(Math.max(0, b.limit_tokens - b.spent_tokens))} remaining</span>
+                <span>alert at {b.alert_pct}%</span>
+              </div>
             </div>
-            <div className="mt-1.5 flex items-center justify-between text-xs text-[var(--text-muted)]">
-              <span>
-                {microsToUSD(remaining)} remaining
-              </span>
-              <span>
-                alert at {b.alert_pct}%
-              </span>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -274,6 +324,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
   const [scopeKind, setScopeKind] = useState<string>("tenant");
   const [scopeId, setScopeId] = useState("");
   const [limit, setLimit] = useState("");
+  const [limitTokens, setLimitTokens] = useState("");
   const [period, setPeriod] = useState("monthly");
   const [alertPct, setAlertPct] = useState(80);
   const [hardCutoff, setHardCutoff] = useState(true);
@@ -284,7 +335,8 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
       api.createBudget({
         scope_kind: scopeKind,
         scope_id: scopeKind === "api_key" && scopeId ? scopeId : undefined,
-        limit_usd: parseFloat(limit),
+        limit_usd: parseFloat(limit) || undefined,
+        limit_tokens: parseInt(limitTokens) || undefined,
         period,
         alert_pct: alertPct,
         hard_cutoff: hardCutoff,
@@ -292,9 +344,12 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budget-status"] });
       qc.invalidateQueries({ queryKey: ["budgets"] });
+      const parts = [];
+      if (parseFloat(limit) > 0) parts.push(`$${parseFloat(limit).toFixed(2)}`);
+      if (parseInt(limitTokens) > 0) parts.push(`${formatTokens(parseInt(limitTokens))} tokens`);
       toast.success(
         "Budget created",
-        `$${parseFloat(limit).toFixed(2)} ${period} limit set for ${scopeKind === "api_key" ? "API key" : "tenant"}.${hardCutoff ? " Requests will be blocked when exhausted." : ""}`,
+        `${parts.join(" + ")} ${period} limit set for ${scopeKind === "api_key" ? "API key" : "tenant"}.${hardCutoff ? " Requests will be blocked when exhausted." : ""}`,
       );
       onClose();
     },
@@ -311,7 +366,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         className="space-y-4 px-6 pb-6"
         onSubmit={(e) => {
           e.preventDefault();
-          if (parseFloat(limit) > 0) create.mutate();
+          if (parseFloat(limit) > 0 || parseInt(limitTokens) > 0) create.mutate();
         }}
       >
         {/* Scope selector */}
@@ -346,7 +401,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
           )}
         </div>
 
-        {/* Limit + Period */}
+        {/* Limit (USD) + Limit (Tokens) + Period */}
         <div className="flex gap-3">
           <div className="w-40">
             <Field label="Limit (USD)">
@@ -357,6 +412,18 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
                 value={limit}
                 onChange={(e) => setLimit(e.target.value)}
                 placeholder="50.00"
+              />
+            </Field>
+          </div>
+          <div className="w-44">
+            <Field label="Limit (Tokens)">
+              <Input
+                type="number"
+                min="0"
+                step="1000"
+                value={limitTokens}
+                onChange={(e) => setLimitTokens(e.target.value)}
+                placeholder="100000000"
               />
             </Field>
           </div>
@@ -395,7 +462,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         {error && <ErrorBanner message={error} />}
 
         <div className="flex gap-2 pt-1">
-          <Button type="submit" disabled={create.isPending || parseFloat(limit) <= 0 || (scopeKind === "api_key" && !scopeId)}>
+          <Button type="submit" disabled={create.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0) || (scopeKind === "api_key" && !scopeId)}>
             <Plus className="h-4 w-4" />
             {create.isPending ? "Creating…" : "Create budget"}
           </Button>
@@ -414,7 +481,8 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
   const qc = useQueryClient();
   const toast = useToast();
 
-  const [limit, setLimit] = useState((budget.limit_micros / 1_000_000).toFixed(2));
+  const [limit, setLimit] = useState(budget.limit_micros > 0 ? (budget.limit_micros / 1_000_000).toFixed(2) : "");
+  const [limitTokens, setLimitTokens] = useState(budget.limit_tokens > 0 ? budget.limit_tokens.toString() : "");
   const [period, setPeriod] = useState(budget.period);
   const [alertPct, setAlertPct] = useState(budget.alert_pct);
   const [hardCutoff, setHardCutoff] = useState(budget.hard_cutoff);
@@ -423,7 +491,8 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
   const update = useMutation({
     mutationFn: () =>
       api.updateBudget(budget.id, {
-        limit_usd: parseFloat(limit),
+        limit_usd: parseFloat(limit) || undefined,
+        limit_tokens: parseInt(limitTokens) || undefined,
         period,
         alert_pct: alertPct,
         hard_cutoff: hardCutoff,
@@ -431,9 +500,12 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["budget-status"] });
       qc.invalidateQueries({ queryKey: ["budgets"] });
+      const parts = [];
+      if (parseFloat(limit) > 0) parts.push(`$${parseFloat(limit).toFixed(2)}`);
+      if (parseInt(limitTokens) > 0) parts.push(`${formatTokens(parseInt(limitTokens))} tokens`);
       toast.success(
         "Budget updated",
-        `Limit changed to $${parseFloat(limit).toFixed(2)} ${period}. ${hardCutoff ? "Hard cutoff is active." : "Advisory mode — requests won't be blocked."}`,
+        `Limit changed to ${parts.join(" + ")} ${period}. ${hardCutoff ? "Hard cutoff is active." : "Advisory mode — requests won't be blocked."}`,
       );
       onClose();
     },
@@ -466,6 +538,19 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
                 step="0.01"
                 value={limit}
                 onChange={(e) => setLimit(e.target.value)}
+                placeholder="0 = no limit"
+              />
+            </Field>
+          </div>
+          <div className="w-44">
+            <Field label="Limit (Tokens)">
+              <Input
+                type="number"
+                min="0"
+                step="1000"
+                value={limitTokens}
+                onChange={(e) => setLimitTokens(e.target.value)}
+                placeholder="0 = no limit"
               />
             </Field>
           </div>
@@ -503,7 +588,7 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
         {error && <ErrorBanner message={error} />}
 
         <div className="flex gap-2 pt-1">
-          <Button type="submit" disabled={update.isPending || parseFloat(limit) <= 0}>
+          <Button type="submit" disabled={update.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0)}>
             {update.isPending ? "Saving…" : "Save changes"}
           </Button>
           <Button variant="ghost" type="button" onClick={onClose}>

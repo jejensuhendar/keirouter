@@ -38,15 +38,8 @@ func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
 // SpendSince returns total cost in micros for a budget scope since the given
 // time. Used by the budget engine to enforce hard limits.
 func (r *UsageRepo) SpendSince(ctx context.Context, scope BudgetScope, scopeID string, since time.Time) (int64, error) {
-	var column string
-	switch scope {
-	case ScopeTenant:
-		column = "tenant_id"
-	case ScopeProject:
-		column = "project_id"
-	case ScopeAPIKey:
-		column = "api_key_id"
-	default:
+	column := scopeColumn(scope)
+	if column == "" {
 		return 0, fmt.Errorf("store: unknown budget scope %q", scope)
 	}
 
@@ -58,6 +51,39 @@ func (r *UsageRepo) SpendSince(ctx context.Context, scope BudgetScope, scopeID s
 		return 0, fmt.Errorf("store: spend since: %w", err)
 	}
 	return total, nil
+}
+
+// SpendAndTokens returns both cost (micros) and total tokens consumed for a
+// budget scope since the given time. This is the combined query used by the
+// budget engine to check USD and token limits in a single round trip.
+func (r *UsageRepo) SpendAndTokens(ctx context.Context, scope BudgetScope, scopeID string, since time.Time) (costMicros int64, tokens int64, err error) {
+	column := scopeColumn(scope)
+	if column == "" {
+		return 0, 0, fmt.Errorf("store: unknown budget scope %q", scope)
+	}
+
+	q := r.db.rebind(fmt.Sprintf(
+		`SELECT COALESCE(SUM(cost_micros), 0), COALESCE(SUM(prompt_tokens + completion_tokens), 0)
+		 FROM usage_records WHERE %s = ? AND created_at >= ?`,
+		column))
+	if err := r.db.sql.QueryRowContext(ctx, q, scopeID, formatTime(since)).Scan(&costMicros, &tokens); err != nil {
+		return 0, 0, fmt.Errorf("store: spend and tokens: %w", err)
+	}
+	return costMicros, tokens, nil
+}
+
+// scopeColumn maps a budget scope to its SQL column name.
+func scopeColumn(scope BudgetScope) string {
+	switch scope {
+	case ScopeTenant:
+		return "tenant_id"
+	case ScopeProject:
+		return "project_id"
+	case ScopeAPIKey:
+		return "api_key_id"
+	default:
+		return ""
+	}
 }
 
 // Summary aggregates usage for a tenant over a time window.

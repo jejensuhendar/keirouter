@@ -24,16 +24,26 @@ export function KeysPage() {
 
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [budgetLimit, setBudgetLimit] = useState("");
+  const [budgetLimitTokens, setBudgetLimitTokens] = useState("");
   const [budgetPeriod, setBudgetPeriod] = useState("monthly");
   const [budgetAlertPct, setBudgetAlertPct] = useState(80);
   const [budgetHardCutoff, setBudgetHardCutoff] = useState(true);
+  const [allowedModels, setAllowedModels] = useState("");
 
   const create = useMutation({
     mutationFn: () => {
-      const budget = budgetOpen && parseFloat(budgetLimit) > 0
-        ? { budget_limit_usd: parseFloat(budgetLimit), budget_period: budgetPeriod, budget_alert_pct: budgetAlertPct, budget_hard_cutoff: budgetHardCutoff }
+      const hasLimit = parseFloat(budgetLimit) > 0;
+      const hasTokenLimit = parseInt(budgetLimitTokens) > 0;
+      const models = allowedModels.split(",").map(s => s.trim()).filter(Boolean);
+      const opts = (budgetOpen && (hasLimit || hasTokenLimit)) || models.length > 0
+        ? {
+            ...(hasLimit ? { budget_limit_usd: parseFloat(budgetLimit) } : {}),
+            ...(hasTokenLimit ? { budget_limit_tokens: parseInt(budgetLimitTokens) } : {}),
+            ...(budgetOpen ? { budget_period: budgetPeriod, budget_alert_pct: budgetAlertPct, budget_hard_cutoff: budgetHardCutoff } : {}),
+            ...(models.length > 0 ? { allowed_models: models } : {}),
+          }
         : undefined;
-      return api.createKey(name, budget);
+      return api.createKey(name, opts);
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["keys"] });
@@ -43,10 +53,14 @@ export function KeysPage() {
       setName("");
       setBudgetOpen(false);
       setBudgetLimit("");
-      const budgetMsg = data.budget
-        ? ` A $${(data.budget.limit_micros / 1_000_000).toFixed(2)} ${data.budget.period} budget has been attached.`
-        : "";
-      toast.success("Key created", `Copy the key below — it won't be shown again.${budgetMsg}`);
+      setBudgetLimitTokens("");
+      setAllowedModels("");
+      const parts = [];
+      if (data.budget?.limit_micros > 0) parts.push(`$${(data.budget.limit_micros / 1_000_000).toFixed(2)}`);
+      if (data.budget?.limit_tokens > 0) parts.push(`${(data.budget.limit_tokens / 1_000_000).toFixed(0)}M tokens`);
+      const budgetMsg = parts.length > 0 ? ` Budget attached: ${parts.join(" + ")} / ${data.budget?.period}.` : "";
+      const modelMsg = data.allowed_models?.length ? ` Models: ${data.allowed_models.join(", ")}.` : "";
+      toast.success("Key created", `Copy the key below — it won't be shown again.${budgetMsg}${modelMsg}`);
     },
     onError: (e: Error) => toast.error("Key creation failed", e.message),
   });
@@ -112,8 +126,16 @@ export function KeysPage() {
             </div>
             {created.budget && (
               <p className="mt-2 text-xs text-[var(--text-muted)]">
-                Budget: ${(created.budget.limit_micros / 1_000_000).toFixed(2)} / {created.budget.period}
+                Budget:
+                {created.budget.limit_micros > 0 && ` $${(created.budget.limit_micros / 1_000_000).toFixed(2)}`}
+                {created.budget.limit_tokens > 0 && ` ${created.budget.limit_tokens >= 1_000_000 ? `${(created.budget.limit_tokens / 1_000_000).toFixed(0)}M` : created.budget.limit_tokens} tokens`}
+                {` / ${created.budget.period}`}
                 {created.budget.hard_cutoff ? " (hard cutoff)" : ""}
+              </p>
+            )}
+            {created.allowed_models && created.allowed_models.length > 0 && (
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                Allowed models: {created.allowed_models.join(", ")}
               </p>
             )}
           </div>
@@ -167,6 +189,18 @@ export function KeysPage() {
                       />
                     </Field>
                   </div>
+                  <div className="w-44">
+                    <Field label="Limit (Tokens)">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="1000"
+                        value={budgetLimitTokens}
+                        onChange={(e) => setBudgetLimitTokens(e.target.value)}
+                        placeholder="100000000"
+                      />
+                    </Field>
+                  </div>
                   <div className="w-40">
                     <Field label="Period">
                       <Select value={budgetPeriod} onChange={(e) => setBudgetPeriod(e.target.value)}>
@@ -174,6 +208,17 @@ export function KeysPage() {
                           <option key={p.value} value={p.value}>{p.label}</option>
                         ))}
                       </Select>
+                    </Field>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <Field label="Allowed models (comma-separated, supports * wildcard)">
+                      <Input
+                        value={allowedModels}
+                        onChange={(e) => setAllowedModels(e.target.value)}
+                        placeholder="claude-sonnet-4-20250514, gpt-4o, claude-*"
+                      />
                     </Field>
                   </div>
                 </div>
@@ -214,7 +259,15 @@ export function KeysPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{k.name}</span>
                     {k.disabled ? <Badge tone="danger">disabled</Badge> : <Badge tone="success">active</Badge>}
+                    {k.allowed_models && k.allowed_models.length > 0 && (
+                      <Badge tone="accent">{k.allowed_models.length} model{k.allowed_models.length > 1 ? "s" : ""}</Badge>
+                    )}
                   </div>
+                  {k.allowed_models && k.allowed_models.length > 0 && (
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                      Models: {k.allowed_models.join(", ")}
+                    </p>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

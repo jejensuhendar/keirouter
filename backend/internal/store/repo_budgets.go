@@ -26,10 +26,10 @@ func (r *BudgetRepo) CreateOnTx(ctx context.Context, tx *sql.Tx, b Budget) error
 
 func (r *BudgetRepo) insert(ctx context.Context, ex sqlExec, b Budget) error {
 	q := r.db.rebind(`INSERT INTO budgets
-		(id, tenant_id, scope_kind, scope_id, limit_micros, period, alert_pct, hard_cutoff, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, tenant_id, scope_kind, scope_id, limit_micros, limit_tokens, period, alert_pct, hard_cutoff, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := ex.ExecContext(ctx, q,
-		b.ID, b.TenantID, string(b.ScopeKind), b.ScopeID, b.LimitMicros, b.Period,
+		b.ID, b.TenantID, string(b.ScopeKind), b.ScopeID, b.LimitMicros, b.LimitTokens, b.Period,
 		b.AlertPct, boolToInt(b.HardCutoff), formatTime(b.CreatedAt), formatTime(b.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("store: create budget: %w", err)
@@ -37,24 +37,23 @@ func (r *BudgetRepo) insert(ctx context.Context, ex sqlExec, b Budget) error {
 	return nil
 }
 
+const budgetSelectCols = `id, tenant_id, scope_kind, scope_id, limit_micros, limit_tokens, period, alert_pct, hard_cutoff, created_at, updated_at`
+
 // ListByScope returns budgets attached to a specific scope (kind + id).
 func (r *BudgetRepo) ListByScope(ctx context.Context, kind BudgetScope, scopeID string) ([]Budget, error) {
-	q := r.db.rebind(`SELECT id, tenant_id, scope_kind, scope_id, limit_micros, period, alert_pct, hard_cutoff, created_at, updated_at
-		FROM budgets WHERE scope_kind = ? AND scope_id = ?`)
+	q := r.db.rebind(`SELECT ` + budgetSelectCols + ` FROM budgets WHERE scope_kind = ? AND scope_id = ?`)
 	return r.queryList(ctx, q, string(kind), scopeID)
 }
 
 // ListByTenant returns all budgets for a tenant.
 func (r *BudgetRepo) ListByTenant(ctx context.Context, tenantID string) ([]Budget, error) {
-	q := r.db.rebind(`SELECT id, tenant_id, scope_kind, scope_id, limit_micros, period, alert_pct, hard_cutoff, created_at, updated_at
-		FROM budgets WHERE tenant_id = ? ORDER BY created_at DESC`)
+	q := r.db.rebind(`SELECT ` + budgetSelectCols + ` FROM budgets WHERE tenant_id = ? ORDER BY created_at DESC`)
 	return r.queryList(ctx, q, tenantID)
 }
 
 // Get returns one budget by id.
 func (r *BudgetRepo) Get(ctx context.Context, id string) (Budget, error) {
-	q := r.db.rebind(`SELECT id, tenant_id, scope_kind, scope_id, limit_micros, period, alert_pct, hard_cutoff, created_at, updated_at
-		FROM budgets WHERE id = ?`)
+	q := r.db.rebind(`SELECT ` + budgetSelectCols + ` FROM budgets WHERE id = ?`)
 	b, err := scanBudget(r.db.sql.QueryRowContext(ctx, q, id).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Budget{}, ErrNotFound
@@ -64,8 +63,8 @@ func (r *BudgetRepo) Get(ctx context.Context, id string) (Budget, error) {
 
 // Update modifies an existing budget's mutable fields.
 func (r *BudgetRepo) Update(ctx context.Context, b Budget) error {
-	q := r.db.rebind(`UPDATE budgets SET limit_micros = ?, period = ?, alert_pct = ?, hard_cutoff = ?, updated_at = ? WHERE id = ?`)
-	res, err := r.db.sql.ExecContext(ctx, q, b.LimitMicros, b.Period, b.AlertPct, boolToInt(b.HardCutoff), formatTime(b.UpdatedAt), b.ID)
+	q := r.db.rebind(`UPDATE budgets SET limit_micros = ?, limit_tokens = ?, period = ?, alert_pct = ?, hard_cutoff = ?, updated_at = ? WHERE id = ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, b.LimitMicros, b.LimitTokens, b.Period, b.AlertPct, boolToInt(b.HardCutoff), formatTime(b.UpdatedAt), b.ID)
 	if err != nil {
 		return fmt.Errorf("store: update budget: %w", err)
 	}
@@ -109,7 +108,7 @@ func scanBudget(scan func(dest ...any) error) (Budget, error) {
 		created    string
 		updated    string
 	)
-	err := scan(&b.ID, &b.TenantID, &scopeKind, &b.ScopeID, &b.LimitMicros, &b.Period,
+	err := scan(&b.ID, &b.TenantID, &scopeKind, &b.ScopeID, &b.LimitMicros, &b.LimitTokens, &b.Period,
 		&b.AlertPct, &hardCutoff, &created, &updated)
 	if err != nil {
 		return Budget{}, err

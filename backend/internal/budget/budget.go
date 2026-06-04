@@ -36,6 +36,15 @@ type Decision struct {
 	// Alerts lists budgets that have crossed their alert threshold but not their
 	// hard limit. Informational; does not block.
 	Alerts []store.Budget
+	// BudgetUsage holds per-budget spend details for reporting.
+	BudgetUsage []BudgetUsage
+}
+
+// BudgetUsage pairs a budget with its current-period spend, both cost and tokens.
+type BudgetUsage struct {
+	Budget      store.Budget
+	CostMicros  int64
+	TokenCount  int64
 }
 
 // Scope identifies the request's billing scopes to check.
@@ -47,7 +56,8 @@ type Scope struct {
 
 // Check evaluates all budgets applicable to a scope and reports whether the
 // request may proceed. It checks key, project, and tenant budgets; the first
-// exhausted hard-cutoff budget blocks the request.
+// exhausted hard-cutoff budget blocks the request. Both USD cost and token
+// limits are evaluated in a single combined query per budget.
 func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 	dec := Decision{Allowed: true}
 
@@ -69,18 +79,39 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 			return Decision{}, fmt.Errorf("budget: list %s budgets: %w", c.kind, err)
 		}
 		for _, b := range budgets {
-			spent, err := e.usage.SpendSince(ctx, b.ScopeKind, b.ScopeID, PeriodStart(b.Period, time.Now()))
+			since := PeriodStart(b.Period, time.Now())
+			spent, tokens, err := e.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
 			if err != nil {
 				return Decision{}, fmt.Errorf("budget: spend lookup: %w", err)
 			}
-			switch {
-			case spent >= b.LimitMicros && b.HardCutoff:
+
+			dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
+				Budget:     b,
+				CostMicros: spent,
+				TokenCount: tokens,
+			})
+
+			// Check USD cost limit.
+			if b.LimitMicros > 0 && spent >= b.LimitMicros && b.HardCutoff {
 				dec.Allowed = false
 				blocking := b
 				dec.Blocking = &blocking
 				return dec, nil
-			case b.AlertPct > 0 && spent*100 >= b.LimitMicros*int64(b.AlertPct):
-				dec.Alerts = append(dec.Alerts, b)
+			}
+			// Check token limit.
+			if b.LimitTokens > 0 && tokens >= b.LimitTokens && b.HardCutoff {
+				dec.Allowed = false
+				blocking := b
+				dec.Blocking = &blocking
+				return dec, nil
+			}
+			// Alert thresholds.
+			if b.AlertPct > 0 {
+				if b.LimitMicros > 0 && spent*100 >= b.LimitMicros*int64(b.AlertPct) {
+					dec.Alerts = append(dec.Alerts, b)
+				} else if b.LimitTokens > 0 && tokens*100 >= b.LimitTokens*int64(b.AlertPct) {
+					dec.Alerts = append(dec.Alerts, b)
+				}
 			}
 		}
 	}

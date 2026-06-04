@@ -216,6 +216,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/v1/models", s.handleListModels)
 		r.Get("/v1/models/info", s.handleModelInfo)
 		r.Get("/v1/models/{kind}", s.handleListModelsByKind)
+
+		// Self-service key usage (token budget + cost trace).
+		r.Get("/v1/keys/me/usage", s.handleKeyUsage)
 	})
 
 	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but

@@ -235,10 +235,15 @@ func (s *Server) adminListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"id": k.ID, "name": k.Name, "display": k.Display,
 			"disabled": k.Disabled, "created_at": k.CreatedAt,
-		})
+		}
+		// Attach allowed models (empty = all allowed).
+		if models, merr := s.identity.Keys().GetAllowedModels(r.Context(), k.ID); merr == nil {
+			entry["allowed_models"] = models
+		}
+		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -250,9 +255,12 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		// Optional budget fields — when present, a budget is co-created
 		// atomically alongside the key so it is protected from the first request.
 		BudgetLimitUSD   *float64 `json:"budget_limit_usd"`
+		BudgetLimitTokens *int64  `json:"budget_limit_tokens"`
 		BudgetPeriod     string   `json:"budget_period"`
 		BudgetAlertPct   *int     `json:"budget_alert_pct"`
 		BudgetHardCutoff *bool    `json:"budget_hard_cutoff"`
+		// Optional model access restriction.
+		AllowedModels []string `json:"allowed_models"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -269,10 +277,12 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hasBudget := body.BudgetLimitUSD != nil && *body.BudgetLimitUSD > 0
+	hasBudget := (body.BudgetLimitUSD != nil && *body.BudgetLimitUSD > 0) ||
+		(body.BudgetLimitTokens != nil && *body.BudgetLimitTokens > 0)
+	hasModels := len(body.AllowedModels) > 0
 
-	if !hasBudget {
-		// Simple path: no budget requested, insert key directly.
+	if !hasBudget && !hasModels {
+		// Simple path: no budget or model access requested, insert key directly.
 		if err := s.identity.CreateFromIssued(r.Context(), issued); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -284,7 +294,7 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Transactional path: key + budget atomically.
+	// Transactional path: key + budget + model access atomically.
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "transaction start failed")
@@ -297,32 +307,51 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hardCutoff := true
-	if body.BudgetHardCutoff != nil {
-		hardCutoff = *body.BudgetHardCutoff
-	}
-	alertPct := 80
-	if body.BudgetAlertPct != nil {
-		alertPct = *body.BudgetAlertPct
-	}
-	period := defaultStr(body.BudgetPeriod, "monthly")
+	var budgetRec store.Budget
+	if hasBudget {
+		hardCutoff := true
+		if body.BudgetHardCutoff != nil {
+			hardCutoff = *body.BudgetHardCutoff
+		}
+		alertPct := 80
+		if body.BudgetAlertPct != nil {
+			alertPct = *body.BudgetAlertPct
+		}
+		period := defaultStr(body.BudgetPeriod, "monthly")
+		var limitMicros int64
+		if body.BudgetLimitUSD != nil {
+			limitMicros = int64(*body.BudgetLimitUSD * 1_000_000)
+		}
+		var limitTokens int64
+		if body.BudgetLimitTokens != nil {
+			limitTokens = *body.BudgetLimitTokens
+		}
 
-	now := time.Now()
-	budgetRec := store.Budget{
-		ID:          uuid.NewString(),
-		TenantID:    adminTenant,
-		ScopeKind:   store.ScopeAPIKey,
-		ScopeID:     issued.Record.ID,
-		LimitMicros: int64(*body.BudgetLimitUSD * 1_000_000),
-		Period:      period,
-		AlertPct:    alertPct,
-		HardCutoff:  hardCutoff,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		now := time.Now()
+		budgetRec = store.Budget{
+			ID:          uuid.NewString(),
+			TenantID:    adminTenant,
+			ScopeKind:   store.ScopeAPIKey,
+			ScopeID:     issued.Record.ID,
+			LimitMicros: limitMicros,
+			LimitTokens: limitTokens,
+			Period:      period,
+			AlertPct:    alertPct,
+			HardCutoff:  hardCutoff,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if err := s.budgets.CreateOnTx(r.Context(), tx, budgetRec); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
-	if err := s.budgets.CreateOnTx(r.Context(), tx, budgetRec); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+
+	if hasModels {
+		if err := s.identity.Keys().SetAllowedModelsOnTx(r.Context(), tx, issued.Record.ID, body.AllowedModels); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -330,15 +359,21 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	resp := map[string]any{
 		"id": issued.Record.ID, "name": issued.Record.Name,
 		"key": issued.Plaintext, "display": issued.Record.Display,
-		"budget": map[string]any{
+	}
+	if hasBudget {
+		resp["budget"] = map[string]any{
 			"id": budgetRec.ID, "scope_kind": string(budgetRec.ScopeKind),
-			"limit_micros": budgetRec.LimitMicros, "period": budgetRec.Period,
-			"alert_pct": budgetRec.AlertPct, "hard_cutoff": budgetRec.HardCutoff,
-		},
-	})
+			"limit_micros": budgetRec.LimitMicros, "limit_tokens": budgetRec.LimitTokens,
+			"period": budgetRec.Period, "alert_pct": budgetRec.AlertPct, "hard_cutoff": budgetRec.HardCutoff,
+		}
+	}
+	if hasModels {
+		resp["allowed_models"] = body.AllowedModels
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *Server) adminDeleteKey(w http.ResponseWriter, r *http.Request) {
@@ -349,24 +384,33 @@ func (s *Server) adminDeleteKey(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// adminUpdateKey toggles a key's disabled state.
+// adminUpdateKey toggles a key's disabled state and/or updates its model access.
 func (s *Server) adminUpdateKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
-		Disabled *bool `json:"disabled"`
+		Disabled      *bool    `json:"disabled"`
+		AllowedModels []string `json:"allowed_models"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.Disabled == nil {
-		writeError(w, http.StatusBadRequest, "disabled field is required")
+	if body.Disabled == nil && body.AllowedModels == nil {
+		writeError(w, http.StatusBadRequest, "disabled or allowed_models field is required")
 		return
 	}
-	if err := s.identity.SetDisabled(r.Context(), id, *body.Disabled); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	if body.Disabled != nil {
+		if err := s.identity.SetDisabled(r.Context(), id, *body.Disabled); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id, "disabled": *body.Disabled})
+	if body.AllowedModels != nil {
+		if err := s.identity.Keys().SetAllowedModels(r.Context(), id, body.AllowedModels); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "disabled": body.Disabled, "allowed_models": body.AllowedModels})
 }
 
 // ---- accounts ---------------------------------------------------------------
@@ -775,8 +819,8 @@ func (s *Server) adminListBudgets(w http.ResponseWriter, r *http.Request) {
 	for _, b := range budgets {
 		out = append(out, map[string]any{
 			"id": b.ID, "scope_kind": b.ScopeKind, "scope_id": b.ScopeID,
-			"limit_micros": b.LimitMicros, "period": b.Period,
-			"alert_pct": b.AlertPct, "hard_cutoff": b.HardCutoff,
+			"limit_micros": b.LimitMicros, "limit_tokens": b.LimitTokens,
+			"period": b.Period, "alert_pct": b.AlertPct, "hard_cutoff": b.HardCutoff,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"budgets": out})
@@ -787,6 +831,7 @@ func (s *Server) adminCreateBudget(w http.ResponseWriter, r *http.Request) {
 		ScopeKind   string `json:"scope_kind"`
 		ScopeID     string `json:"scope_id"`
 		LimitUSD    float64 `json:"limit_usd"`
+		LimitTokens int64   `json:"limit_tokens"`
 		Period      string `json:"period"`
 		AlertPct    int    `json:"alert_pct"`
 		HardCutoff  *bool  `json:"hard_cutoff"`
@@ -794,8 +839,8 @@ func (s *Server) adminCreateBudget(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	if body.LimitUSD <= 0 {
-		writeError(w, http.StatusBadRequest, "limit_usd must be positive")
+	if body.LimitUSD <= 0 && body.LimitTokens <= 0 {
+		writeError(w, http.StatusBadRequest, "limit_usd or limit_tokens must be positive")
 		return
 	}
 	hardCutoff := true
@@ -810,6 +855,7 @@ func (s *Server) adminCreateBudget(w http.ResponseWriter, r *http.Request) {
 		ScopeKind:   store.BudgetScope(defaultStr(body.ScopeKind, string(store.ScopeTenant))),
 		ScopeID:     defaultStr(body.ScopeID, adminTenant),
 		LimitMicros: int64(body.LimitUSD * 1_000_000),
+		LimitTokens: body.LimitTokens,
 		Period:      defaultStr(body.Period, "monthly"),
 		AlertPct:    defaultInt(body.AlertPct, 80),
 		HardCutoff:  hardCutoff,
@@ -843,10 +889,11 @@ func (s *Server) adminUpdateBudget(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		LimitUSD   *float64 `json:"limit_usd"`
-		Period     *string  `json:"period"`
-		AlertPct   *int     `json:"alert_pct"`
-		HardCutoff *bool    `json:"hard_cutoff"`
+		LimitUSD    *float64 `json:"limit_usd"`
+		LimitTokens *int64   `json:"limit_tokens"`
+		Period      *string  `json:"period"`
+		AlertPct    *int     `json:"alert_pct"`
+		HardCutoff  *bool    `json:"hard_cutoff"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -858,6 +905,9 @@ func (s *Server) adminUpdateBudget(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.LimitMicros = int64(*body.LimitUSD * 1_000_000)
+	}
+	if body.LimitTokens != nil {
+		existing.LimitTokens = *body.LimitTokens
 	}
 	if body.Period != nil {
 		existing.Period = *body.Period
@@ -889,15 +939,20 @@ func (s *Server) adminBudgetStatus(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(budgets))
 	for _, b := range budgets {
 		since := budget.PeriodStart(b.Period, time.Now())
-		spent, err := s.usage.SpendSince(ctx, b.ScopeKind, b.ScopeID, since)
+		spent, tokens, err := s.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
 		if err != nil {
 			s.log.Error("budget status: spend lookup failed", "budget_id", b.ID, "err", err)
 			spent = 0
+			tokens = 0
 		}
 
 		pctUsed := 0.0
 		if b.LimitMicros > 0 {
 			pctUsed = float64(spent) / float64(b.LimitMicros) * 100
+		}
+		tokPctUsed := 0.0
+		if b.LimitTokens > 0 {
+			tokPctUsed = float64(tokens) / float64(b.LimitTokens) * 100
 		}
 
 		// Resolve scope display name.
@@ -909,17 +964,20 @@ func (s *Server) adminBudgetStatus(w http.ResponseWriter, r *http.Request) {
 		}
 
 		out = append(out, map[string]any{
-			"id":           b.ID,
-			"scope_kind":   b.ScopeKind,
-			"scope_id":     b.ScopeID,
-			"scope_name":   scopeName,
-			"limit_micros": b.LimitMicros,
-			"period":       b.Period,
-			"alert_pct":    b.AlertPct,
-			"hard_cutoff":  b.HardCutoff,
-			"spent_micros": spent,
-			"pct_used":     pctUsed,
-			"period_start": since,
+			"id":              b.ID,
+			"scope_kind":      b.ScopeKind,
+			"scope_id":        b.ScopeID,
+			"scope_name":      scopeName,
+			"limit_micros":    b.LimitMicros,
+			"limit_tokens":    b.LimitTokens,
+			"period":          b.Period,
+			"alert_pct":       b.AlertPct,
+			"hard_cutoff":     b.HardCutoff,
+			"spent_micros":    spent,
+			"spent_tokens":    tokens,
+			"pct_used":        pctUsed,
+			"tokens_pct_used": tokPctUsed,
+			"period_start":    since,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"budgets": out})
