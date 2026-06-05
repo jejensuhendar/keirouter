@@ -58,7 +58,7 @@ install:
 build: build-frontend build-backend
 
 build-backend:
-	cd $(BACKEND_DIR) && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../$(BIN) ./cmd/keirouter
+	cd $(BACKEND_DIR) && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.Version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o ../$(BIN) ./cmd/keirouter
 
 build-frontend:
 	cd $(FRONTEND_DIR) && npm run build

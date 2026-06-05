@@ -17,6 +17,10 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/config"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=...".
+// Defaults to "dev" for local builds.
+var Version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "keirouter:", err)
@@ -25,11 +29,17 @@ func main() {
 }
 
 func run() error {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	configPath := flag.String("config", "", "path to a YAML config file (optional)")
 	bootstrap := flag.Bool("bootstrap", false, "create an initial API key and exit")
 	healthcheck := flag.Bool("healthcheck", false, "check the local HTTP health endpoint and exit")
 	keyName := flag.String("key-name", "default", "name for the bootstrapped API key")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("keirouter", Version)
+		return nil
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

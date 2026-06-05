@@ -198,7 +198,8 @@ run_source_install() {
   (cd frontend && npm run build --silent)
 
   info "Building keirouter binary"
-  (cd backend && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$INSTALL_DIR/keirouter" ./cmd/keirouter)
+  GIT_DESCRIBE="$(git -C "$INSTALL_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)"
+  (cd backend && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.Version=${GIT_DESCRIBE}" -o "$INSTALL_DIR/keirouter" ./cmd/keirouter)
 
   copy_with_optional_sudo "$INSTALL_DIR/keirouter" "$BIN_DIR/keirouter" "0755"
   install_frontend_assets
