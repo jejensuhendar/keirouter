@@ -233,7 +233,7 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminListKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.identity.List(r.Context(), adminTenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	out := make([]map[string]any, 0, len(keys))
@@ -284,7 +284,7 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 	// Generate key material (crypto operations, no DB write yet).
 	issued, err := s.identity.Generate(adminTenant, body.ProjectID, body.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 
@@ -295,7 +295,7 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 	if !hasBudget && !hasModels {
 		// Simple path: no budget or model access requested, insert key directly.
 		if err := s.identity.CreateFromIssued(r.Context(), issued); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
@@ -314,7 +314,7 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback() }() // no-op after commit
 
 	if err := s.identity.Keys().CreateOnTx(r.Context(), tx, issued.Record); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 
@@ -361,14 +361,14 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:   now,
 		}
 		if err := s.budgets.CreateOnTx(r.Context(), tx, budgetRec); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
 	}
 
 	if hasModels {
 		if err := s.identity.Keys().SetAllowedModelsOnTx(r.Context(), tx, issued.Record.ID, body.AllowedModels); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
 	}
@@ -397,7 +397,7 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeleteKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.identity.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -419,13 +419,13 @@ func (s *Server) adminUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Disabled != nil {
 		if err := s.identity.SetDisabled(r.Context(), id, *body.Disabled); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
 	}
 	if body.AllowedModels != nil {
 		if err := s.identity.Keys().SetAllowedModels(r.Context(), id, body.AllowedModels); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
 	}
@@ -437,7 +437,7 @@ func (s *Server) adminUpdateKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminListAccounts(w http.ResponseWriter, r *http.Request) {
 	accs, err := s.accounts.ListByTenant(r.Context(), adminTenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	out := make([]map[string]any, 0, len(accs))
@@ -557,7 +557,7 @@ func (s *Server) adminCreateAccount(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if err := s.accounts.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -669,7 +669,7 @@ func (s *Server) adminUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		acc.Disabled = *body.Disabled
 	}
 	if err := s.accounts.Update(r.Context(), acc); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -766,7 +766,7 @@ func (s *Server) adminAccountQuota(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 	chains, err := s.chains.ListByTenant(r.Context(), adminTenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	out := make([]map[string]any, 0, len(chains))
@@ -844,7 +844,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err := s.chains.Create(r.Context(), chain); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": chain.ID, "name": chain.Name})
@@ -852,7 +852,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeleteChain(w http.ResponseWriter, r *http.Request) {
 	if err := s.chains.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -912,7 +912,7 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.chains.Update(r.Context(), existing); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": existing.ID, "name": existing.Name})
@@ -923,7 +923,7 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminListBudgets(w http.ResponseWriter, r *http.Request) {
 	budgets, err := s.budgets.ListByTenant(r.Context(), adminTenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	out := make([]map[string]any, 0, len(budgets))
@@ -1015,7 +1015,7 @@ func (s *Server) adminCreateBudget(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:   now,
 	}
 	if err := s.budgets.Create(r.Context(), b); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": b.ID})
@@ -1023,7 +1023,7 @@ func (s *Server) adminCreateBudget(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminDeleteBudget(w http.ResponseWriter, r *http.Request) {
 	if err := s.budgets.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1036,7 +1036,7 @@ func (s *Server) adminUpdateBudget(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "budget not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 
@@ -1090,7 +1090,7 @@ func (s *Server) adminUpdateBudget(w http.ResponseWriter, r *http.Request) {
 	existing.UpdatedAt = time.Now()
 
 	if err := s.budgets.Update(r.Context(), existing); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1111,7 +1111,7 @@ func (s *Server) adminBudgetStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	budgets, err := s.budgets.ListByTenant(ctx, adminTenant)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 
@@ -1179,7 +1179,7 @@ func (s *Server) adminUsageSummary(w http.ResponseWriter, r *http.Request) {
 
 	sum, err := s.usage.Summarize(r.Context(), adminTenant, since)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1199,7 +1199,7 @@ func (s *Server) adminUsageSummary(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminListAliases(w http.ResponseWriter, r *http.Request) {
 	aliases, err := s.aliases.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	out := make(map[string]string, len(aliases))
@@ -1226,7 +1226,7 @@ func (s *Server) adminSetAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.aliases.Set(r.Context(), body.Alias, body.Target); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -1239,7 +1239,7 @@ func (s *Server) adminDeleteAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.aliases.Delete(r.Context(), alias); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1310,7 +1310,7 @@ func (s *Server) adminDisableModels(w http.ResponseWriter, r *http.Request) {
 		merged = append(merged, id)
 	}
 	if err := s.saveDisabledModels(r.Context(), body.Provider, merged); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ids": merged})
@@ -1340,7 +1340,7 @@ func (s *Server) adminEnableModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.saveDisabledModels(r.Context(), body.Provider, kept); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ids": kept})
@@ -1701,7 +1701,7 @@ func (s *Server) adminTestProxy(w http.ResponseWriter, r *http.Request) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://httpbin.org/ip", nil)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	resp, err := client.Do(req)

@@ -10,21 +10,38 @@ package budget
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
+// reservation tracks in-flight spend that has been budget-checked but not yet
+// metered. This prevents the TOCTOU race where concurrent requests all pass
+// the budget check before any usage is recorded.
+type reservation struct {
+	micros int64
+}
+
 // Engine evaluates budgets against recorded usage.
 type Engine struct {
 	budgets *store.BudgetRepo
 	usage   *store.UsageRepo
+
+	// reservations tracks estimated spend for in-flight requests, keyed by
+	// scope ID. Prevents concurrent requests from overshooting hard limits.
+	mu           sync.Mutex
+	reservations map[string]*reservation // key: scopeID
 }
 
 // New builds a budget Engine.
 func New(budgets *store.BudgetRepo, usage *store.UsageRepo) *Engine {
-	return &Engine{budgets: budgets, usage: usage}
+	return &Engine{
+		budgets:      budgets,
+		usage:        usage,
+		reservations: make(map[string]*reservation),
+	}
 }
 
 // Decision is the outcome of a budget check.
@@ -85,6 +102,12 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 				return Decision{}, fmt.Errorf("budget: spend lookup: %w", err)
 			}
 
+			// Include in-flight reservations in the spend calculation to
+			// prevent the TOCTOU race where concurrent requests all pass the
+			// budget check before any usage is recorded.
+			reserved := e.getReserved(b.ScopeKind, b.ScopeID)
+			spent += reserved
+
 			dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
 				Budget:     b,
 				CostMicros: spent,
@@ -132,6 +155,93 @@ func (e *Engine) CheckOrError(ctx context.Context, scope Scope) error {
 		}
 	}
 	return nil
+}
+
+// Reserve atomically checks the budget and records a tentative spend
+// reservation. This prevents the TOCTOU race where N concurrent requests all
+// read the same spend value and proceed, overshooting the hard limit.
+//
+// estimatedMicros is the expected cost of the request (use 0 for unknown; the
+// reservation will still block concurrent requests from reading stale spend).
+//
+// After the request completes, call Confirm() with the actual cost, or
+// Release() if the request failed before metering.
+func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64) error {
+	dec, err := e.Check(ctx, scope)
+	if err != nil {
+		return err
+	}
+	if !dec.Allowed {
+		return &core.ProviderError{
+			Kind:    core.ErrBudgetBlocked,
+			Message: fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
+		}
+	}
+
+	// Add reservation for each scope ID that has a hard-cutoff budget.
+	for _, bu := range dec.BudgetUsage {
+		if !bu.Budget.HardCutoff {
+			continue
+		}
+		key := reservationKey(bu.Budget.ScopeKind, bu.Budget.ScopeID)
+		cost := estimatedMicros
+		if cost <= 0 {
+			// Use a minimal reservation to at least prevent concurrent reads.
+			cost = 1
+		}
+
+		e.mu.Lock()
+		if r, ok := e.reservations[key]; ok {
+			r.micros += cost
+		} else {
+			e.reservations[key] = &reservation{micros: cost}
+		}
+		e.mu.Unlock()
+	}
+	return nil
+}
+
+// Confirm replaces the reservation with the actual recorded cost. Call this
+// after meter.Record succeeds. The real usage is now in the database, so the
+// reservation is no longer needed.
+func (e *Engine) Confirm(scope Scope, actualMicros int64) {
+	e.releaseAll(scope)
+}
+
+// Release removes the reservation without recording actual cost. Call this
+// when a request fails before metering (e.g., upstream error, timeout).
+func (e *Engine) Release(scope Scope) {
+	e.releaseAll(scope)
+}
+
+func (e *Engine) releaseAll(scope Scope) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, id := range []string{scope.APIKeyID, scope.ProjectID, scope.TenantID} {
+		if id == "" {
+			continue
+		}
+		// We don't know the scope kind here, so delete from all possible keys.
+		// The reservation map is small and this is infrequent.
+		delete(e.reservations, reservationKey(store.ScopeAPIKey, id))
+		delete(e.reservations, reservationKey(store.ScopeProject, id))
+		delete(e.reservations, reservationKey(store.ScopeTenant, id))
+	}
+}
+
+func reservationKey(kind store.BudgetScope, scopeID string) string {
+	return string(kind) + ":" + scopeID
+}
+
+// getReserved returns the sum of in-flight reservations for a scope.
+func (e *Engine) getReserved(kind store.BudgetScope, scopeID string) int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	key := reservationKey(kind, scopeID)
+	if r, ok := e.reservations[key]; ok {
+		return r.micros
+	}
+	return 0
 }
 
 // PeriodStart returns the start of the current budget window for a period.

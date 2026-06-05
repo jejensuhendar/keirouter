@@ -125,6 +125,9 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	vec := p.embedPrompt(ctx, req)
 	if hit, ok := p.cacheLookup(ctx, vec); ok {
 		p.log.Debug("cache hit, skipping upstream")
+		// Release budget reservation — cache hits cost nothing.
+		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		p.budgetRelease(scope)
 		// Record cache hit for usage visibility.
 		if p.meter != nil {
 			p.meter.Record(ctx, meter.Event{
@@ -159,6 +162,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	p.log.Debug("dispatcher planned", "attempts", len(attempts), "required", required)
 
+	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
 	var lastErr error
 	for i, attempt := range attempts {
 		started := time.Now()
@@ -188,6 +192,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			}
 			if !pe.Fallbackable() {
 				p.log.Debug("attempt not fallbackable, aborting", "kind", pe.Kind)
+				p.budgetRelease(scope)
 				return nil, pe
 			}
 			if p.metrics != nil {
@@ -202,6 +207,8 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		p.dispatcher.NoteSuccess(ctx, attempt.Account.ID, attempt.Target.Model)
 		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save)
 		p.cacheStore(ctx, vec, resp)
+		// Confirm budget reservation — usage is now recorded in DB.
+		p.budgetConfirm(scope, cost)
 		p.log.Debug("attempt success", "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "latency_ms", latency.Milliseconds(),
 			"prompt_tok", resp.Usage.PromptTokens, "completion_tok", resp.Usage.CompletionTokens)
@@ -219,6 +226,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	if lastErr == nil {
 		lastErr = &core.ProviderError{Kind: core.ErrInternal, Message: "pipeline: no attempts executed"}
 	}
+	p.budgetRelease(scope)
 	return nil, lastErr
 }
 
@@ -255,9 +263,11 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	save := buildSaveState(slimStats, opts)
 
 	required := capability.Required(req)
+	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
 	attempts, err := p.dispatcher.PlanWith(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("stream dispatcher plan failed", "err", err)
+		p.budgetRelease(scope)
 		return nil, err
 	}
 	p.log.Debug("stream dispatcher planned", "attempts", len(attempts))
@@ -294,17 +304,18 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 					if p.metrics != nil {
 						p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 					}
-					if !pe.Fallbackable() {
-						return nil, pe
-					}
-					if p.metrics != nil {
-						p.metrics.RecordFallback(string(pe.Kind))
-					}
-					p.log.Warn("direct stream attempt failed, falling back",
-						"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
-					continue
+				if !pe.Fallbackable() {
+					p.budgetRelease(scope)
+					return nil, pe
 				}
-				p.log.Debug("direct stream connected (zero-copy)", "provider", attempt.Target.Provider,
+				if p.metrics != nil {
+					p.metrics.RecordFallback(string(pe.Kind))
+				}
+				p.log.Warn("direct stream attempt failed, falling back",
+					"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
+				continue
+			}
+			p.log.Debug("direct stream connected (zero-copy)", "provider", attempt.Target.Provider,
 					"model", attempt.Target.Model)
 				p.dispatcher.NoteSuccess(ctx, attempt.Account.ID, attempt.Target.Model)
 				// Wrap the raw body in a tee reader that captures all bytes
@@ -316,18 +327,20 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 				meta := req.Metadata
 				acc := attempt
 				started := time.Now()
-				saveCopy := save
-				capturedTTFT := ttft
-				usageFunc := func() {
-					usage := extractUsageFromStream(capture.Bytes())
-					// Use TTFT as latency (time until LLM starts responding),
-					// not total stream duration.
-					effectiveLatency := capturedTTFT
-					if effectiveLatency <= 0 {
-						effectiveLatency = time.Since(started)
-					}
-					p.recordWithTTFT(ctx, meta, acc, usage, false, effectiveLatency, capturedTTFT, saveCopy)
+			saveCopy := save
+			capturedTTFT := ttft
+			budgetScope := scope
+			usageFunc := func() {
+				usage := extractUsageFromStream(capture.Bytes())
+				// Use TTFT as latency (time until LLM starts responding),
+				// not total stream duration.
+				effectiveLatency := capturedTTFT
+				if effectiveLatency <= 0 {
+					effectiveLatency = time.Since(started)
 				}
+				cost := p.recordWithTTFT(ctx, meta, acc, usage, false, effectiveLatency, capturedTTFT, saveCopy)
+				p.budgetConfirm(budgetScope, cost)
+			}
 				return &StreamResult{
 					DirectBody:      wrapped,
 					Provider:        attempt.Target.Provider,
@@ -348,10 +361,11 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 			if p.metrics != nil {
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 			}
-			if !pe.Fallbackable() {
-				p.log.Debug("stream attempt not fallbackable, aborting", "kind", pe.Kind)
-				return nil, pe
-			}
+		if !pe.Fallbackable() {
+			p.log.Debug("stream attempt not fallbackable, aborting", "kind", pe.Kind)
+			p.budgetRelease(scope)
+			return nil, pe
+		}
 			if p.metrics != nil {
 				p.metrics.RecordFallback(string(pe.Kind))
 			}
@@ -369,7 +383,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		out := make(chan core.StreamChunk, 16)
 		meta := req.Metadata
 		acc := attempt
-		go p.pumpStream(ctx, upstream, out, meta, acc, started, &ttft, save)
+		go p.pumpStream(ctx, upstream, out, meta, acc, started, &ttft, save, scope)
 
 		return &StreamResult{
 			Chunks:    out,
@@ -382,6 +396,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	if lastErr == nil {
 		lastErr = &core.ProviderError{Kind: core.ErrInternal, Message: "pipeline: no attempts executed"}
 	}
+	p.budgetRelease(scope)
 	return nil, lastErr
 }
 
@@ -393,7 +408,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 // When StreamStallTimeout is configured, a timer resets on every chunk. If no
 // chunk arrives within the timeout, the stream is cancelled with ErrTimeout.
 func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, out chan<- core.StreamChunk,
-	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft *time.Duration, save *saveState) {
+	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft *time.Duration, save *saveState, scope budget.Scope) {
 	defer close(out)
 
 	// Set up stall detection. The timer resets every time a chunk arrives.
@@ -446,7 +461,8 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 				if effectiveLatency <= 0 {
 					effectiveLatency = time.Since(started)
 				}
-				p.recordWithTTFT(ctx, meta, attempt, usage, false, effectiveLatency, *ttft, save)
+				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, effectiveLatency, *ttft, save)
+				p.budgetConfirm(scope, cost)
 				return
 			}
 			resetStall()
@@ -464,6 +480,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 		case <-stallCtx.Done():
 			if ctx.Err() != nil {
 				// Parent context cancelled (client disconnected).
+				p.budgetRelease(scope)
 				for range in {
 				}
 				return
@@ -481,7 +498,8 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 			if effectiveLatency <= 0 {
 				effectiveLatency = time.Since(started)
 			}
-			p.recordWithTTFT(ctx, meta, attempt, usage, false, effectiveLatency, *ttft, save)
+			cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, effectiveLatency, *ttft, save)
+			p.budgetConfirm(scope, cost)
 			return
 		}
 	}
@@ -514,6 +532,8 @@ func mergeUsage(old, new core.Usage) core.Usage {
 }
 
 // preflight runs validation and the budget guard before any upstream call.
+// It uses Reserve() instead of Check() to prevent the TOCTOU race where
+// concurrent requests all pass the budget check before any usage is recorded.
 func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Options) error {
 	if len(opts.Targets) == 0 {
 		return &core.ProviderError{Kind: core.ErrBadRequest, Message: "no routing targets resolved for model"}
@@ -524,11 +544,25 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 			ProjectID: req.Metadata.ProjectID,
 			APIKeyID:  req.Metadata.APIKeyID,
 		}
-		if err := p.budget.CheckOrError(ctx, scope); err != nil {
+		if err := p.budget.Reserve(ctx, scope, 0); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// budgetConfirm releases the reservation after successful metering.
+func (p *Pipeline) budgetConfirm(scope budget.Scope, costMicros int64) {
+	if p.budget != nil {
+		p.budget.Confirm(scope, costMicros)
+	}
+}
+
+// budgetRelease removes the reservation when a request fails before metering.
+func (p *Pipeline) budgetRelease(scope budget.Scope) {
+	if p.budget != nil {
+		p.budget.Release(scope)
+	}
 }
 
 // applyTokenSaving runs the input-side (slimmer/RTK) and output-side

@@ -118,6 +118,28 @@ func NewMemoryStore(max int, ttl time.Duration) *MemoryStore {
 	return &MemoryStore{max: max, ttl: ttl}
 }
 
+// evict removes expired entries from the store to reclaim memory. It is
+// called lazily during Put to avoid the need for a background goroutine.
+func (m *MemoryStore) evict(now time.Time) {
+	if m.ttl <= 0 || len(m.entries) == 0 {
+		return
+	}
+	alive := m.entries[:0]
+	for _, e := range m.entries {
+		if now.Sub(e.StoredAt) <= m.ttl {
+			alive = append(alive, e)
+		}
+	}
+	removed := len(m.entries) - len(alive)
+	if removed > 0 {
+		m.entries = alive
+		m.count -= removed
+		if m.cursor >= len(m.entries) {
+			m.cursor = 0
+		}
+	}
+}
+
 // Nearest returns the highest-cosine entry to vec.
 func (m *MemoryStore) Nearest(_ context.Context, vec []float32) (Entry, float64, bool, error) {
 	m.mu.RLock()
@@ -142,10 +164,18 @@ func (m *MemoryStore) Nearest(_ context.Context, vec []float32) (Entry, float64,
 	return best, bestScore, bestScore >= 0, nil
 }
 
-// Put inserts an entry using an O(1) ring buffer.
+// evictEvery controls how often (by insert count) lazy eviction runs.
+const evictEvery = 100
+
+// Put inserts an entry using an O(1) ring buffer. Every evictEvery inserts,
+// expired entries are evicted to reclaim memory from the slice.
 func (m *MemoryStore) Put(_ context.Context, e Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Lazy eviction: sweep expired entries periodically to reclaim memory.
+	if m.count > 0 && m.count%evictEvery == 0 {
+		m.evict(time.Now())
+	}
 	if m.max > 0 && m.count >= m.max {
 		m.entries[m.cursor] = e // overwrite oldest (O(1))
 	} else {

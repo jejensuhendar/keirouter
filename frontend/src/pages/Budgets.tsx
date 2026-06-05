@@ -181,7 +181,7 @@ export function BudgetsPage() {
         onClose={() => setShowCreate(false)}
         title="Create budget"
         subtitle="Set a spending cap for a scope and period."
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-xl"
       >
         <CreateBudgetForm
           keys={keys.data?.keys ?? []}
@@ -195,7 +195,7 @@ export function BudgetsPage() {
         onClose={() => setEditingId(null)}
         title="Edit budget"
         subtitle={editingBudget ? `Editing ${editingBudget.scope_name} ${editingBudget.period} budget` : undefined}
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-xl"
       >
         {editingBudget && (
           <EditBudgetForm
@@ -581,7 +581,7 @@ function LimitFields({
   tokenPlaceholder?: string;
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-3">
       <Field label="Limit (USD)">
         <div className="relative">
           <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
@@ -630,7 +630,7 @@ function GuardFields({
   setHardCutoff: (value: boolean) => void;
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
+    <div className="grid gap-3 sm:grid-cols-2">
       <Field label="Alert threshold (%)">
         <div className="relative">
           <Input
@@ -675,9 +675,9 @@ function BudgetPreview({
   const usd = parseUSD(limit);
   const tokens = parseTokens(limitTokens);
   return (
-    <div className="rounded-xl border border-accent-200/40 bg-accent-50/30 dark:border-accent-900/40 dark:bg-accent-900/10 p-5">
-      <h4 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Configuration Summary</h4>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="rounded-xl border border-accent-200/40 bg-accent-50/30 dark:border-accent-900/40 dark:bg-accent-900/10 p-4">
+      <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Configuration Summary</h4>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <p className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
             <KeyRound className="h-3.5 w-3.5" />
@@ -713,7 +713,7 @@ function BudgetPreview({
           </p>
         </div>
         {tokens > 0 && (
-          <div className="sm:col-span-2 lg:col-span-4 pt-3 border-t border-[var(--border)] border-dashed">
+          <div className="sm:col-span-2 lg:col-span-4 pt-2.5 border-t border-[var(--border)] border-dashed">
             <p className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
               <Gauge className="h-3.5 w-3.5" />
               Token Cap
@@ -777,7 +777,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
 
   return (
     <form
-      className="space-y-8"
+      className="flex flex-col max-h-[calc(100vh-10rem)]"
       onSubmit={(e) => {
         e.preventDefault();
         setError("");
@@ -792,10 +792,10 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         create.mutate();
       }}
     >
-      <div className="px-6 py-5 space-y-8">
+      <div className="px-5 py-4 space-y-6 overflow-y-auto min-h-0">
         
         {/* Section 1: Scope */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">1. Target Scope</h3>
             <p className="text-xs text-[var(--text-muted)]">Choose the scope this budget applies to.</p>
@@ -807,20 +807,20 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
                 setScopeKind("tenant");
                 setScopeId("");
               }}
-              className={`rounded-xl border px-4 py-3.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${
+              className={`rounded-xl border px-4 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${
                 scopeKind === "tenant"
                   ? "border-accent-400 bg-accent-500/10"
                   : "border-[var(--border)] bg-[var(--bg-subtle)] hover:bg-[var(--bg)]"
               }`}
             >
               <Building2 className="h-5 w-5 text-[var(--text-muted)]" />
-              <span className="mt-2.5 block text-sm font-medium">Tenant Default</span>
+              <span className="mt-2 block text-sm font-medium">Tenant Default</span>
               <span className="mt-0.5 block text-xs text-[var(--text-muted)]">Applies globally to the tenant</span>
             </button>
             <button
               type="button"
               onClick={() => setScopeKind("api_key")}
-              className={`rounded-xl border px-4 py-3.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${
+              className={`rounded-xl border px-4 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${
                 scopeKind === "api_key"
                   ? "border-accent-400 bg-accent-500/10"
                   : "border-[var(--border)] bg-[var(--bg-subtle)] hover:bg-[var(--bg)]"
@@ -833,7 +833,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
           </div>
 
           {scopeKind === "api_key" && (
-            <div className="mt-3 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-subtle)] p-4 space-y-3 shadow-sm">
+            <div className="mt-3 rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-subtle)] p-3 space-y-2.5 shadow-sm">
               <p className="text-xs font-medium text-[var(--text-muted)]">Select API Key</p>
               <APIKeySearchSelect keys={keys} value={scopeId} onChange={setScopeId} />
               <SelectedKeySummary keyRecord={selectedKey} />
@@ -844,7 +844,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         <div className="h-px bg-[var(--border)] w-full" />
 
         {/* Section 2: Limits */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">2. Spending Limits</h3>
             <p className="text-xs text-[var(--text-muted)]">Set maximum thresholds for USD spend or token consumption.</p>
@@ -862,7 +862,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         <div className="h-px bg-[var(--border)] w-full" />
 
         {/* Section 3: Enforcement */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">3. Enforcement Rules</h3>
             <p className="text-xs text-[var(--text-muted)]">Configure how to handle exhaustion and approaching limits.</p>
@@ -887,7 +887,7 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
         {error && <ErrorBanner message={error} />}
       </div>
 
-      <div className="flex gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-4 rounded-b-xl">
+      <div className="shrink-0 flex gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-4 rounded-b-xl">
         <div className="flex-1" />
         <Button variant="ghost" type="button" onClick={onClose}>
           Cancel
@@ -946,7 +946,7 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
 
   return (
     <form
-      className="space-y-8"
+      className="flex flex-col max-h-[calc(100vh-10rem)]"
       onSubmit={(e) => {
         e.preventDefault();
         setError("");
@@ -957,10 +957,10 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
         update.mutate();
       }}
     >
-      <div className="px-6 py-5 space-y-8">
+      <div className="px-5 py-4 space-y-6 overflow-y-auto min-h-0">
         
         {/* Section 1: Scope */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">1. Target Scope</h3>
             <p className="text-xs text-[var(--text-muted)]">The scope this budget applies to (immutable).</p>
@@ -997,7 +997,7 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
         <div className="h-px bg-[var(--border)] w-full" />
 
         {/* Section 2: Limits */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">2. Spending Limits</h3>
             <p className="text-xs text-[var(--text-muted)]">Set maximum thresholds for USD spend or token consumption.</p>
@@ -1017,7 +1017,7 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
         <div className="h-px bg-[var(--border)] w-full" />
 
         {/* Section 3: Enforcement */}
-        <section className="space-y-4">
+        <section className="space-y-3">
           <div>
             <h3 className="text-sm font-semibold text-[var(--text-strong)]">3. Enforcement Rules</h3>
             <p className="text-xs text-[var(--text-muted)]">Configure how to handle exhaustion and approaching limits.</p>
@@ -1041,7 +1041,7 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
         {error && <ErrorBanner message={error} />}
       </div>
 
-      <div className="flex gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-4 rounded-b-xl">
+      <div className="shrink-0 flex gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-4 rounded-b-xl">
         <div className="flex-1" />
         <Button variant="ghost" type="button" onClick={onClose}>
           Cancel
