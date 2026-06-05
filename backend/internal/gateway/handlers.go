@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
@@ -483,6 +484,110 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get current period summary.
+	now := time.Now()
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	summary, err := s.usage.Summarize(ctx, tenantOf(key), periodStart)
+	if err != nil {
+		s.log.Error("key usage: summarize failed", "err", err)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key_id":         key.ID,
+		"key_name":       key.Name,
+		"budgets":        budgetOuts,
+		"allowed_models": allowedModels,
+		"current_period": map[string]any{
+			"prompt_tokens":     summary.PromptTokens,
+			"completion_tokens": summary.CompletionTokens,
+			"total_requests":    summary.TotalRequests,
+			"cost_usd":          float64(summary.CostMicros) / 1_000_000,
+		},
+	})
+}
+
+func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
+	keyID := chi.URLParam(r, "id")
+	if keyID == "" {
+		writeError(w, http.StatusBadRequest, "missing key id")
+		return
+	}
+
+	ctx := r.Context()
+	key, err := s.identity.Keys().Get(ctx, keyID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get key")
+		return
+	}
+
+	// Get budgets scoped to this key.
+	budgets, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, key.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list budgets")
+		return
+	}
+
+	type budgetOut struct {
+		Period        string  `json:"period"`
+		LimitTokens   int64   `json:"limit_tokens"`
+		TokensUsed    int64   `json:"tokens_used"`
+		TokensRemain  int64   `json:"tokens_remaining"`
+		TokensPctUsed float64 `json:"tokens_pct_used"`
+		LimitUSD      float64 `json:"limit_usd"`
+		SpentUSD      float64 `json:"spent_usd"`
+		USDRemaining  float64 `json:"usd_remaining"`
+		USDUsed       float64 `json:"usd_pct_used"`
+		Alert         bool    `json:"alert"`
+	}
+
+	var budgetOuts []budgetOut
+	for _, b := range budgets {
+		since := budget.PeriodStart(b.Period, time.Now())
+		costMicros, tokens, err := s.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
+		if err != nil {
+			s.log.Error("key usage: spend lookup failed", "err", err)
+			continue
+		}
+
+		bo := budgetOut{
+			Period:      b.Period,
+			LimitTokens: b.LimitTokens,
+			TokensUsed:  tokens,
+			LimitUSD:    float64(b.LimitMicros) / 1_000_000,
+			SpentUSD:    float64(costMicros) / 1_000_000,
+		}
+		if b.LimitTokens > 0 {
+			bo.TokensRemain = b.LimitTokens - tokens
+			if bo.TokensRemain < 0 {
+				bo.TokensRemain = 0
+			}
+			bo.TokensPctUsed = float64(tokens) / float64(b.LimitTokens) * 100
+		}
+		if b.LimitMicros > 0 {
+			bo.USDRemaining = bo.LimitUSD - bo.SpentUSD
+			if bo.USDRemaining < 0 {
+				bo.USDRemaining = 0
+			}
+			bo.USDUsed = float64(costMicros) / float64(b.LimitMicros) * 100
+		}
+		if b.AlertPct > 0 {
+			if (b.LimitMicros > 0 && costMicros*100 >= b.LimitMicros*int64(b.AlertPct)) ||
+				(b.LimitTokens > 0 && tokens*100 >= b.LimitTokens*int64(b.AlertPct)) {
+				bo.Alert = true
+			}
+		}
+		budgetOuts = append(budgetOuts, bo)
+	}
+
+	allowedModels, err := s.identity.Keys().GetAllowedModels(ctx, key.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get model access")
+		return
+	}
+
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	summary, err := s.usage.Summarize(ctx, tenantOf(key), periodStart)

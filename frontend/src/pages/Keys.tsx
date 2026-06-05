@@ -208,18 +208,33 @@ export function KeysPage() {
                       Models: {k.allowed_models.join(", ")}
                     </p>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(k.display);
-                      toast.success("Key copied", "The masked key identifier has been copied to your clipboard.");
-                    }}
-                    className="mt-0.5 flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
-                    title="Copy key"
-                  >
-                    {k.display}
-                    <Copy className="h-3 w-3 opacity-50 transition-opacity hover:opacity-100" />
-                  </button>
+                  <div className="flex items-center gap-4 mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(k.display);
+                        toast.success("Key copied", "The masked key identifier has been copied to your clipboard.");
+                      }}
+                      className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+                      title="Copy key"
+                    >
+                      {k.display}
+                      <Copy className="h-3 w-3 opacity-50 transition-opacity hover:opacity-100" />
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(`${window.location.origin}/portal?id=${k.id}`);
+                        toast.success("Portal link copied", "Share this link with the key owner to let them track their usage.");
+                      }}
+                      className="flex items-center gap-1.5 font-mono text-xs text-emerald-500/80 transition-colors hover:text-emerald-400"
+                      title="Copy portal link"
+                    >
+                      Portal Link
+                      <Copy className="h-3 w-3 opacity-50 transition-opacity hover:opacity-100" />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -419,6 +434,9 @@ function StepSuccess({
   setCopied: (v: boolean) => void;
   onClose: () => void;
 }) {
+  const [copiedUrl, setCopiedUrl] = useState(false);
+  const portalUrl = `${window.location.origin}/portal?id=${created.id}`;
+
   return (
     <div className="space-y-4 px-6 py-5">
       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
@@ -436,6 +454,25 @@ function StepSuccess({
           >
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
+        <p className="text-xs font-medium text-[var(--text-muted)]">Telemetry Portal URL — share this with the key owner to let them track their usage.</p>
+        <div className="mt-2 flex items-center gap-2">
+          <code className="flex-1 overflow-x-auto rounded-lg bg-[var(--bg-elevated)] px-3 py-2.5 font-mono text-xs whitespace-nowrap">
+            {portalUrl}
+          </code>
+          <Button
+            onClick={() => {
+              navigator.clipboard.writeText(portalUrl);
+              setCopiedUrl(true);
+              setTimeout(() => setCopiedUrl(false), 1500);
+            }}
+          >
+            {copiedUrl ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            {copiedUrl ? "Copied" : "Copy"}
           </Button>
         </div>
       </div>

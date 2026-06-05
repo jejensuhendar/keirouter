@@ -20,33 +20,40 @@ import { SkillsPage } from "./pages/Skills";
 import { ConsoleLogPage } from "./pages/ConsoleLog";
 import { OAuthCallbackPage } from "./pages/OAuthCallback";
 
+import { KeyPortalPage } from "./pages/KeyPortal";
+
 export function App() {
   return (
-    <AuthGate>
-      <Routes>
-        {/* OAuth callback — standalone page, no sidebar layout */}
-        <Route path="oauth/callback" element={<OAuthCallbackPage />} />
-        <Route element={<Layout />}>
-          <Route index element={<OverviewPage />} />
-          <Route path="providers" element={<ProvidersPage />} />
-          <Route path="providers/:id" element={<ProviderDetailPage />} />
-          <Route path="endpoints" element={<EndpointsPage />} />
-          <Route path="chains" element={<ChainsPage />} />
-          <Route path="usage" element={<UsagePage />} />
-          <Route path="quota" element={<QuotaPage />} />
-          <Route path="cli-tools" element={<CLIToolsPage />} />
-          <Route path="cli-tools/:toolId" element={<CLIToolDetailPage />} />
-          <Route path="media" element={<MediaProvidersPage />} />
-          <Route path="media/:kind" element={<MediaProvidersPage />} />
-          <Route path="media/:kind/:id" element={<MediaProviderDetailPage />} />
-          <Route path="proxy-pools" element={<ProxyPoolsPage />} />
-          <Route path="skills" element={<SkillsPage />} />
-          <Route path="console" element={<ConsoleLogPage />} />
-          <Route path="keys" element={<KeysPage />} />
-          <Route path="budgets" element={<BudgetsPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-        </Route>
-      </Routes>
-    </AuthGate>
+    <Routes>
+      <Route path="portal" element={<KeyPortalPage />} />
+      <Route path="*" element={
+        <AuthGate>
+          <Routes>
+            {/* OAuth callback — standalone page, no sidebar layout */}
+            <Route path="oauth/callback" element={<OAuthCallbackPage />} />
+            <Route element={<Layout />}>
+              <Route index element={<OverviewPage />} />
+              <Route path="providers" element={<ProvidersPage />} />
+              <Route path="providers/:id" element={<ProviderDetailPage />} />
+              <Route path="endpoints" element={<EndpointsPage />} />
+              <Route path="chains" element={<ChainsPage />} />
+              <Route path="usage" element={<UsagePage />} />
+              <Route path="quota" element={<QuotaPage />} />
+              <Route path="cli-tools" element={<CLIToolsPage />} />
+              <Route path="cli-tools/:toolId" element={<CLIToolDetailPage />} />
+              <Route path="media" element={<MediaProvidersPage />} />
+              <Route path="media/:kind" element={<MediaProvidersPage />} />
+              <Route path="media/:kind/:id" element={<MediaProviderDetailPage />} />
+              <Route path="proxy-pools" element={<ProxyPoolsPage />} />
+              <Route path="skills" element={<SkillsPage />} />
+              <Route path="console" element={<ConsoleLogPage />} />
+              <Route path="keys" element={<KeysPage />} />
+              <Route path="budgets" element={<BudgetsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
+        </AuthGate>
+      } />
+    </Routes>
   );
 }

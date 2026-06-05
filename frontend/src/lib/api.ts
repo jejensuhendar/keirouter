@@ -412,6 +412,15 @@ class APIError extends Error {
   }
 }
 
+/** Returns the browser's IANA timezone (e.g. "Asia/Jakarta"), falling back to UTC. */
+function browserTZ(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
@@ -430,6 +439,56 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+export interface KeyUsageData {
+  key_id: string;
+  key_name: string;
+  budgets: {
+    period: string;
+    limit_tokens: number;
+    tokens_used: number;
+    tokens_remaining: number;
+    tokens_pct_used: number;
+    limit_usd: number;
+    spent_usd: number;
+    usd_remaining: number;
+    usd_pct_used: number;
+    alert: boolean;
+  }[];
+  allowed_models: string[];
+  current_period: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_requests: number;
+    cost_usd: number;
+  };
+}
+
+/**
+ * Fetch usage stats for an API Key, authenticated via the key itself (public portal)
+ */
+export async function fetchKeyUsage(key: string): Promise<KeyUsageData> {
+  const resp = await fetch("/v1/keys/me/usage", {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || "Invalid key or server error");
+  }
+  return resp.json();
+}
+
+/**
+ * Fetch usage stats for an API Key using its database ID (public portal link sharing)
+ */
+export async function fetchKeyUsageById(id: string): Promise<KeyUsageData> {
+  const resp = await fetch(`/v1/portal/keys/${id}/usage`);
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || "Invalid key ID or server error");
+  }
+  return resp.json();
 }
 
 export const api = {
@@ -498,14 +557,14 @@ export const api = {
     request<void>("PATCH", `/budgets/${id}`, patch),
   deleteBudget: (id: string) => request<void>("DELETE", `/budgets/${id}`),
 
-  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}`),
+  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}&tz=${browserTZ()}`),
   usageInsights: (period: string) =>
-    request<UsageInsights>("GET", `/usage/insights?period=${period}`),
+    request<UsageInsights>("GET", `/usage/insights?period=${period}&tz=${browserTZ()}`),
   modelUsage: (period: string) =>
-    request<{ models: ModelUsage[] }>("GET", `/usage/models?period=${period}`),
+    request<{ models: ModelUsage[] }>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
 
   quota: (period: string) =>
-    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}`),
+    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
 
   consoleLog: () => request<{ logs: string[] }>("GET", "/console"),
 

@@ -19,18 +19,28 @@ import (
 )
 
 // sinceForPeriod maps a dashboard period query value to a lower-bound time.
-// Mirrors adminUsageSummary's windows: today / week / month (default).
-func sinceForPeriod(period string) time.Time {
-	now := time.Now()
+// The tz parameter is an IANA timezone string (e.g. "Asia/Jakarta") sent by the
+// browser so that "today" means midnight in the user's local time, not the
+// server's. Falls back to the server's local time when tz is empty.
+func sinceForPeriod(period, tz string) time.Time {
+	loc := time.Local
+	if tz != "" {
+		if l, err := time.LoadLocation(tz); err == nil {
+			loc = l
+		}
+	}
+	now := time.Now().In(loc)
 	switch period {
 	case "today":
-		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc).UTC()
+	case "24h":
+		return time.Now().UTC().Add(-24 * time.Hour)
 	case "week":
-		return now.AddDate(0, 0, -7)
+		return now.AddDate(0, 0, -7).UTC()
 	case "month", "":
-		return now.AddDate(0, -1, 0)
+		return now.AddDate(0, -1, 0).UTC()
 	default:
-		return now.AddDate(0, 0, -30)
+		return now.AddDate(0, 0, -30).UTC()
 	}
 }
 
@@ -41,7 +51,8 @@ func sinceForPeriod(period string) time.Time {
 // activity rows, and headline metrics (success rate, average latency).
 func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
-	since := sinceForPeriod(period)
+	tz := r.URL.Query().Get("tz")
+	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
 	sum, err := s.usage.Summarize(ctx, adminTenant, since)
@@ -198,7 +209,8 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 // model usage table on the Usage page.
 func (s *Server) adminModelUsage(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
-	since := sinceForPeriod(period)
+	tz := r.URL.Query().Get("tz")
+	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
 	models, err := s.usage.ByModel(ctx, adminTenant, since)
@@ -269,7 +281,8 @@ func bucketTimeline(points []store.TimeBucket, from, to time.Time, n int) []time
 // much each connected account has consumed in the period.
 func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
-	since := sinceForPeriod(period)
+	tz := r.URL.Query().Get("tz")
+	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
 	accs, err := s.accounts.ListByTenant(ctx, adminTenant)
