@@ -37,68 +37,98 @@ If you prefer Docker and do not want Go/Node.js on the machine:
 curl -fsSL https://raw.githubusercontent.com/mydisha/keirouter/main/scripts/install.sh | bash -s -- --docker
 ```
 
-## VPS With Docker Compose
+## VPS Deployment Guide
 
+### Option 1: VPS with Docker Compose (SQLite - Default)
+
+This is the simplest way to get KeiRouter running on a clean VPS (Ubuntu/Debian).
+
+**1. Clone the repository**
 ```bash
 git clone https://github.com/mydisha/keirouter.git
 cd keirouter
+```
+
+**2. Configure Environment Variables**
+```bash
 cp .env.example .env
 ```
-
-Edit `.env` and set a stable `KEIROUTER_MASTER_KEY`:
-
+Open `.env` with your favorite editor (e.g., `nano .env`). You **must** generate a secure 32-byte master key and set it as `KEIROUTER_MASTER_KEY`:
 ```bash
+# Generate a key locally:
 openssl rand -base64 32
 ```
+Paste the generated key into your `.env` file.
 
-Start the default SQLite deployment:
-
+**3. Start the Deployment**
 ```bash
 docker compose up -d --build
+```
+
+**4. View Logs**
+```bash
 docker compose logs -f keirouter
 ```
 
-Open `http://YOUR_SERVER_IP:20180` or put it behind your reverse proxy.
+**5. Access the Dashboard**
+By default, KeiRouter will be available at `http://YOUR_VPS_IP:20180`. It is highly recommended to put KeiRouter behind a reverse proxy like **Nginx**, **Caddy**, or **Traefik** to secure it with HTTPS and a custom domain.
 
-## VPS With Postgres
+### Option 2: VPS with Postgres
 
-Set `POSTGRES_PASSWORD` in `.env`, then run:
+If you are deploying for a team or expecting high traffic, you can use Postgres instead of SQLite.
 
+**1. Prepare `.env`**
+Follow the steps above to create your `.env` file, but make sure you also set the database password:
+```env
+POSTGRES_PASSWORD=your_secure_postgres_password
+```
+
+**2. Start the Deployment**
+Use the override compose file to start both KeiRouter and Postgres:
 ```bash
 docker compose -f compose.yaml -f deploy/compose.postgres.yaml up -d --build
 ```
+*Note: The app container still stores runtime secrets and generated files in a Docker volume mounted at `/data`, while request/account data is stored in the Postgres database.*
 
-The app container still stores runtime secrets and generated files in `/data`,
-while request/account data is stored in Postgres.
+## Coolify Deployment Guide
 
-## Coolify And Similar Platforms
+Deploying KeiRouter on [Coolify](https://coolify.io/) is highly recommended as it automates SSL/TLS certificates and reverse proxy configuration.
 
-Use one of these deployment styles:
+### Deployment Steps
 
-- Docker Compose app: use `compose.yaml`.
-- Dockerfile app: use `deploy/Dockerfile`, expose port `20180`, and mount
-  persistent storage at `/data`.
+1. **Create a New Resource**: In your Coolify dashboard, create a new resource and select **Project** -> **Environment** -> **Add New Resource**.
+2. **Select Source**: Choose **Git Repository** (Public) and enter:
+   - **Repository URL**: `https://github.com/mydisha/keirouter`
+   - **Branch**: `main`
+3. **Build Pack**: Select **Docker Compose** as the build pack. Coolify will automatically detect the `compose.yaml` file in the root directory.
+4. **Configuration**:
+   - **Domains**: Enter your custom domain (e.g., `https://keirouter.yourdomain.com`). Coolify will automatically map this to the exposed port.
+   - **Port**: Make sure the container port is set to `20180` (this is the port KeiRouter listens on inside the container).
+5. **Environment Variables**:
+   Navigate to the Environment Variables tab in Coolify and add the following variables (Switch to Developer view to edit as text):
+   ```env
+   KEIROUTER_SERVER__HOST=0.0.0.0
+   KEIROUTER_SERVER__PORT=20180
+   KEIROUTER_SECURITY__BIND_LOOPBACK_ONLY=false
+   # Generate a 32-byte base64 key locally and paste it here:
+   KEIROUTER_SECURITY__MASTER_KEY=<your_generated_master_key>
+   KEIROUTER_LOG__FORMAT=json
+   ```
+6. **Persistent Storage**:
+   KeiRouter needs persistent storage for its SQLite database and runtime secrets. In Coolify, go to the **Storages** tab and create a volume:
+   - **Name**: `keirouter-data`
+   - **Destination**: `/data`
+7. **Deploy**: Click the **Deploy** button. Coolify will build the Docker image and start the container.
 
-Recommended environment variables:
+### Using External/Managed Postgres on Coolify
 
-```bash
-KEIROUTER_DATA__DIR=/data
-KEIROUTER_SERVER__HOST=0.0.0.0
-KEIROUTER_SERVER__PORT=20180
-KEIROUTER_SECURITY__BIND_LOOPBACK_ONLY=false
-KEIROUTER_SECURITY__MASTER_KEY=<base64 32-byte key>
-KEIROUTER_LOG__FORMAT=json
-```
+If you provisioned a Postgres database on Coolify or use an external managed DB, add these additional environment variables to your KeiRouter resource:
 
-If you install dashboard assets to a custom path, set
-`KEIROUTER_FRONTEND_DIR=/path/to/frontend/dist`.
-
-For a managed Postgres database, also set:
-
-```bash
+```env
 KEIROUTER_DATABASE__DRIVER=postgres
 KEIROUTER_DATABASE__DSN=postgres://USER:PASSWORD@HOST:5432/DB?sslmode=require
 ```
+*(Replace `USER`, `PASSWORD`, `HOST`, and `DB` with your Postgres credentials).*
 
 ## Updates
 

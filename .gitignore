@@ -8,8 +8,8 @@ backend/dist/
 *.test
 *.out
 coverage.txt
-keirouter
-keirouter.exe
+/keirouter
+/keirouter.exe
 
 # Go build cache / vendor
 vendor/
