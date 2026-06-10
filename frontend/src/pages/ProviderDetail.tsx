@@ -577,13 +577,6 @@ const routingOptions = [
   { value: "smart-round-robin", label: "Smart" },
 ];
 
-const routingDescriptions: Record<string, string> = {
-  inherit: "Uses the global routing strategy from Settings.",
-  "fill-first": "Always starts from the highest priority healthy account.",
-  "round-robin": "Cycles accounts after the sticky limit.",
-  "smart-round-robin": "Cycles new conversations, then keeps each conversation on the same account.",
-};
-
 function RoutingControls({
   settings,
   saving,

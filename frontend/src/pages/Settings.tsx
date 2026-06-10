@@ -7,7 +7,7 @@ import {
   Palette,
 } from "lucide-react";
 import { api, type EndpointSettings, type BrandingSettings } from "../lib/api";
-import { PALETTES, getPalette, getPaletteScales } from "../lib/palettes";
+import { PALETTES, getPaletteScales } from "../lib/palettes";
 import { applyShadeScale, generateShades } from "../lib/color-utils";
 import { PageHeader } from "../components/Layout";
 import { useUpdateInfo } from "../components/UpdateNotification";
@@ -489,14 +489,12 @@ function ImageUploadField({
   hint,
   value,
   onChange,
-  previewClassName,
   accept,
 }: {
   label: string;
   hint: string;
   value: string;
   onChange: (dataUrl: string) => void;
-  previewClassName?: string;
   accept: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);

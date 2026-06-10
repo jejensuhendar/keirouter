@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import { fetchKeyUsage, fetchKeyUsageById, APIError } from "../lib/api";
 import { useBranding } from "../contexts/BrandingContext";
-import { KeyRound, AlertTriangle, CheckCircle2, Activity, Hash, DollarSign, LogOut, TrendingUp, Layers } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Activity, Hash, DollarSign, LogOut, Layers } from "lucide-react";
 import { Card, Button, Input, Spinner, ErrorCard, StatCard, Badge } from "../components/ui";
 
 export function KeyPortalPage() {
