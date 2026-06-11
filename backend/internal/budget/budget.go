@@ -77,9 +77,9 @@ type Decision struct {
 
 // BudgetUsage pairs a budget with its current-period spend, both cost and tokens.
 type BudgetUsage struct {
-	Budget      store.Budget
-	CostMicros  int64
-	TokenCount  int64
+	Budget     store.Budget
+	CostMicros int64
+	TokenCount int64
 }
 
 // Scope identifies the request's billing scopes to check.
@@ -139,7 +139,7 @@ func (e *Engine) InvalidateBudgetCacheForScope(kind store.BudgetScope, scopeID s
 // Check evaluates all budgets applicable to a scope and reports whether the
 // request may proceed. It checks key, project, and tenant budgets; the first
 // exhausted hard-cutoff budget blocks the request. Both USD cost and token
-// limits are evaluated in a single combined query per budget.
+// limits are evaluated in a single batched query per check.
 func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 	dec := Decision{Allowed: true}
 
@@ -152,6 +152,14 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 		{store.ScopeTenant, scope.TenantID},
 	}
 
+	// Phase 1: collect all budgets and their spend scopes.
+	type budgetEntry struct {
+		budget store.Budget
+		idx    int // index into the batch spend query
+	}
+	var entries []budgetEntry
+	var spendScopes []store.SpendScope
+
 	for _, c := range checks {
 		if c.id == "" {
 			continue
@@ -162,44 +170,65 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 		}
 		for _, b := range budgets {
 			since := PeriodStart(b.Period, time.Now())
-			spent, tokens, err := e.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
-			if err != nil {
-				return Decision{}, fmt.Errorf("budget: spend lookup: %w", err)
-			}
-
-			// Include in-flight reservations in the spend calculation to
-			// prevent the TOCTOU race where concurrent requests all pass the
-			// budget check before any usage is recorded.
-			reserved := e.getReserved(b.ScopeKind, b.ScopeID)
-			spent += reserved
-
-			dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
-				Budget:     b,
-				CostMicros: spent,
-				TokenCount: tokens,
+			idx := len(spendScopes)
+			spendScopes = append(spendScopes, store.SpendScope{
+				Kind:    b.ScopeKind,
+				ScopeID: b.ScopeID,
+				Since:   since,
 			})
+			entries = append(entries, budgetEntry{budget: b, idx: idx})
+		}
+	}
 
-			// Check USD cost limit.
-			if b.LimitMicros > 0 && spent >= b.LimitMicros && b.HardCutoff {
-				dec.Allowed = false
-				blocking := b
-				dec.Blocking = &blocking
-				return dec, nil
-			}
-			// Check token limit.
-			if b.LimitTokens > 0 && tokens >= b.LimitTokens && b.HardCutoff {
-				dec.Allowed = false
-				blocking := b
-				dec.Blocking = &blocking
-				return dec, nil
-			}
-			// Alert thresholds.
-			if b.AlertPct > 0 {
-				if b.LimitMicros > 0 && spent*100 >= b.LimitMicros*int64(b.AlertPct) {
-					dec.Alerts = append(dec.Alerts, b)
-				} else if b.LimitTokens > 0 && tokens*100 >= b.LimitTokens*int64(b.AlertPct) {
-					dec.Alerts = append(dec.Alerts, b)
-				}
+	if len(entries) == 0 {
+		return dec, nil
+	}
+
+	// Phase 2: fetch all spend data in a single SQL round-trip.
+	spendResults, err := e.usage.SpendAndTokensBatch(ctx, spendScopes)
+	if err != nil {
+		return Decision{}, fmt.Errorf("budget: batch spend: %w", err)
+	}
+
+	// Phase 3: evaluate limits using the pre-fetched results.
+	for _, ent := range entries {
+		b := ent.budget
+		r := spendResults[ent.idx]
+		spent := r.CostMicros
+		tokens := r.Tokens
+
+		// Include in-flight reservations in the spend calculation to
+		// prevent the TOCTOU race where concurrent requests all pass the
+		// budget check before any usage is recorded.
+		reserved := e.getReserved(b.ScopeKind, b.ScopeID)
+		spent += reserved
+
+		dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
+			Budget:     b,
+			CostMicros: spent,
+			TokenCount: tokens,
+		})
+
+		// Check USD cost limit.
+		if b.LimitMicros > 0 && spent >= b.LimitMicros && b.HardCutoff {
+			dec.Allowed = false
+			blocking := b
+			dec.Blocking = &blocking
+			return dec, nil
+		}
+		// Check token limit.
+		if b.LimitTokens > 0 && tokens >= b.LimitTokens && b.HardCutoff {
+			dec.Allowed = false
+			blocking := b
+			dec.Blocking = &blocking
+			return dec, nil
+		}
+		// Alert thresholds.
+		if b.AlertPct > 0 {
+			if b.LimitMicros > 0 && spent*100 >= b.LimitMicros*int64(b.AlertPct) {
+				dec.Alerts = append(dec.Alerts, b)
+			} else if b.LimitTokens > 0 && tokens*100 >= b.LimitTokens*int64(b.AlertPct) {
+				dec.Alerts = append(dec.Alerts, b)
 			}
 		}
 	}

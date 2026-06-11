@@ -102,7 +102,12 @@ func (s *Service) Authenticate(ctx context.Context, plaintext string) (store.API
 	}
 
 	// Best-effort last-used update; failure here must not fail auth.
-	_ = s.keys.TouchLastUsed(ctx, rec.ID, time.Now())
+	// Run in a goroutine so this synchronous DB write never blocks the
+	// auth path. On SQLite (single-writer) this avoids contending with
+	// usage recording on the hot path.
+	go func() {
+		_ = s.keys.TouchLastUsed(context.Background(), rec.ID, time.Now())
+	}()
 	return rec, nil
 }
 

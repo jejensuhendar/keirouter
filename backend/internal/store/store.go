@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver registered as "pgx"
@@ -146,7 +147,7 @@ func (db *DB) rebind(query string) string {
 		if query[i] == '?' {
 			n++
 			b = append(b, '$')
-			b = append(b, []byte(fmt.Sprintf("%d", n))...)
+			b = strconv.AppendInt(b, int64(n), 10)
 			continue
 		}
 		b = append(b, query[i])

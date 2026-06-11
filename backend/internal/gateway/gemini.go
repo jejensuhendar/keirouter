@@ -75,7 +75,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve model")
 		return
 	}
-	affinityKey := requestAffinityKey(r, body, req)
+	affinityKey := requestAffinityKey(r, req)
 
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,

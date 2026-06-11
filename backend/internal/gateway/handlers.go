@@ -5,12 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mydisha/keirouter/backend/internal/budget"
@@ -201,7 +202,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	for i, t := range resolved.Targets {
 		s.consoleLog.Logf("DEBUG", "  target[%d]: %s/%s", i, t.Provider, t.Model)
 	}
-	affinityKey := requestAffinityKey(r, body, req)
+	affinityKey := requestAffinityKey(r, req)
 	body = nil // release body for GC — no longer needed
 
 	opts := pipeline.Options{
@@ -460,17 +461,33 @@ func (s *Server) filterAllowedTargets(ctx context.Context, keyID string, targets
 		return targets, nil // no restriction
 	}
 
+	// Match all targets in-memory against the already-fetched allowed list.
+	// This avoids N additional DB round-trips (one per target) that the
+	// previous IsModelAllowed-per-target pattern caused.
 	var filtered []dispatch.Target
 	for _, t := range targets {
-		ok, err := keys.IsModelAllowed(ctx, keyID, t.Model)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
+		if modelMatchesAny(t.Model, allowed) {
 			filtered = append(filtered, t)
 		}
 	}
 	return filtered, nil
+}
+
+// modelMatchesAny reports whether model matches any pattern in allowed.
+// Patterns support a trailing '*' wildcard (e.g. "claude-*").
+func modelMatchesAny(model string, allowed []string) bool {
+	lower := strings.ToLower(model)
+	for _, pattern := range allowed {
+		lp := strings.ToLower(pattern)
+		if strings.HasSuffix(lp, "*") {
+			if strings.HasPrefix(lower, lp[:len(lp)-1]) {
+				return true
+			}
+		} else if lp == lower {
+			return true
+		}
+	}
+	return false
 }
 
 // handleKeyUsage serves GET /v1/keys/me/usage — the authenticated API key
@@ -782,20 +799,14 @@ func sanitizeClientToken(s string) string {
 	return strings.Trim(b.String(), "-_.")
 }
 
-func requestAffinityKey(r *http.Request, body []byte, req *core.ChatRequest) string {
-	for _, header := range []string{
-		"X-KeiRouter-Affinity",
-		"X-Conversation-ID",
-		"X-Thread-ID",
-		"X-Session-ID",
-		"OpenAI-Conversation-ID",
-	} {
+func requestAffinityKey(r *http.Request, req *core.ChatRequest) string {
+	for _, header := range affinityHeaders {
 		if v := strings.TrimSpace(r.Header.Get(header)); v != "" {
 			return "header:" + strings.ToLower(header) + ":" + v
 		}
 	}
 
-	if v := jsonAffinityKey(body); v != "" {
+	if v := extraAffinityKey(req); v != "" {
 		return "body:" + v
 	}
 	if req == nil {
@@ -809,38 +820,51 @@ func requestAffinityKey(r *http.Request, body []byte, req *core.ChatRequest) str
 	return "fingerprint:" + hex.EncodeToString(sum[:])
 }
 
-func jsonAffinityKey(body []byte) string {
-	var obj map[string]json.RawMessage
-	if len(body) == 0 || json.Unmarshal(body, &obj) != nil {
+// affinityHeaders is the ordered list of HTTP headers checked for routing affinity.
+var affinityHeaders = []string{
+	"X-KeiRouter-Affinity",
+	"X-Conversation-ID",
+	"X-Thread-ID",
+	"X-Session-ID",
+	"OpenAI-Conversation-ID",
+}
+
+// extraAffinityKey extracts an affinity key from the already-parsed
+// ChatRequest.Extra map, avoiding a full JSON re-parse of the request body.
+func extraAffinityKey(req *core.ChatRequest) string {
+	if req == nil || len(req.Extra) == 0 {
 		return ""
 	}
-	for _, key := range []string{
-		"conversation_id",
-		"thread_id",
-		"session_id",
-		"previous_response_id",
-		"parent_id",
-	} {
-		if v := rawString(obj[key]); v != "" {
+	for _, key := range affinityBodyKeys {
+		if v := rawString(req.Extra[key]); v != "" {
 			return key + ":" + v
 		}
 	}
-	if v := rawString(obj["conversation"]); v != "" {
+	if v := rawString(req.Extra["conversation"]); v != "" {
 		return "conversation:" + v
 	}
-	if v := rawObjectString(obj["conversation"], "id"); v != "" {
+	if v := rawObjectString(req.Extra["conversation"], "id"); v != "" {
 		return "conversation.id:" + v
 	}
-	if v := rawObjectString(obj["metadata"], "conversation_id"); v != "" {
+	if v := rawObjectString(req.Extra["metadata"], "conversation_id"); v != "" {
 		return "metadata.conversation_id:" + v
 	}
-	if v := rawObjectString(obj["metadata"], "thread_id"); v != "" {
+	if v := rawObjectString(req.Extra["metadata"], "thread_id"); v != "" {
 		return "metadata.thread_id:" + v
 	}
-	if v := rawObjectString(obj["metadata"], "session_id"); v != "" {
+	if v := rawObjectString(req.Extra["metadata"], "session_id"); v != "" {
 		return "metadata.session_id:" + v
 	}
 	return ""
+}
+
+// affinityBodyKeys are the top-level JSON keys checked for routing affinity.
+var affinityBodyKeys = []string{
+	"conversation_id",
+	"thread_id",
+	"session_id",
+	"previous_response_id",
+	"parent_id",
 }
 
 func rawString(raw json.RawMessage) string {

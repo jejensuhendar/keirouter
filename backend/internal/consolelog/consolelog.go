@@ -5,6 +5,7 @@ package consolelog
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -109,7 +110,13 @@ func (b *Buffer) Unsubscribe(l *Listener) {
 // Logf appends a formatted log line with timestamp and level tag.
 // Levels: LOG, INFO, WARN, ERROR, DEBUG.
 func (b *Buffer) Logf(level, format string, args ...any) {
-	ts := time.Now().Format("15:04:05.000")
-	msg := fmt.Sprintf(format, args...)
-	b.Append(fmt.Sprintf("[%s] [%s] %s", ts, level, msg))
+	var sb strings.Builder
+	sb.Grow(128)
+	sb.WriteByte('[')
+	sb.WriteString(time.Now().Format("15:04:05.000"))
+	sb.WriteString("] [")
+	sb.WriteString(level)
+	sb.WriteString("] ")
+	fmt.Fprintf(&sb, format, args...)
+	b.Append(sb.String())
 }

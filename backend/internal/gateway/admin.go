@@ -157,6 +157,7 @@ func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
 			"icon":          "/providers/" + p.ID + ".png",
 			"deprecated":    p.Deprecated,
 			"hidden":        p.Hidden,
+			"pinned":        p.Pinned,
 			"notice":        p.Notice,
 			"drivable":      connectors.DrivableDialect(p.Dialect) || webProvider(p.ID),
 			"input_per_m":   p.InputPerM,

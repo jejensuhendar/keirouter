@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -60,23 +61,36 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
-	sum, err := s.usage.Summarize(ctx, adminTenant, since)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	breakdown, err := s.usage.Breakdown(ctx, adminTenant, since)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	recent, err := s.usage.Recent(ctx, adminTenant, 8)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	timeline, err := s.usage.Timeline(ctx, adminTenant, since, time.Now(), 24)
-	if err != nil {
+	// Run the four independent queries concurrently to reduce latency
+	// from sum(sequential) to max(parallel).
+	var (
+		sum       store.Summary
+		breakdown []store.ProviderUsage
+		recent    []store.RecentRecord
+		timeline  []store.TimeBucket
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		sum, err = s.usage.Summarize(gctx, adminTenant, since)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		breakdown, err = s.usage.Breakdown(gctx, adminTenant, since)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		recent, err = s.usage.Recent(gctx, adminTenant, 8)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		timeline, err = s.usage.Timeline(gctx, adminTenant, since, time.Now(), 24)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -230,14 +244,14 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"since":              since,
 		},
 		"savings": map[string]any{
-			"slim_bytes_saved":  sum.SlimBytesSaved,
-			"slim_tokens_saved": sum.SlimTokensSaved,
-			"caveman_requests":  sum.CavemanRequests,
-			"terse_requests":    sum.TerseRequests,
-			"usd_saved":         usdPerToken(sum.SlimTokensSaved),
+			"slim_bytes_saved":   sum.SlimBytesSaved,
+			"slim_tokens_saved":  sum.SlimTokensSaved,
+			"caveman_requests":   sum.CavemanRequests,
+			"terse_requests":     sum.TerseRequests,
+			"usd_saved":          usdPerToken(sum.SlimTokensSaved),
 			"usd_saved_estimate": true,
-			"rules":             rules,
-			"by_client":         byClient,
+			"rules":              rules,
+			"by_client":          byClient,
 		},
 		"providers": providers,
 		"recent":    recentRows,
@@ -532,7 +546,7 @@ func (s *Server) adminListProxyPools(w http.ResponseWriter, r *http.Request) {
 			"proxy_url": p.ProxyURL, "no_proxy": p.NoProxy,
 			"strict": p.Strict, "is_active": p.IsActive,
 			"test_status": p.TestStatus, "last_tested": p.LastTested,
-			"last_error": p.LastError,
+			"last_error":             p.LastError,
 			"bound_connection_count": boundCounts[p.ID],
 		})
 	}
@@ -651,7 +665,7 @@ func (s *Server) adminDeleteProxyPool(w http.ResponseWriter, r *http.Request) {
 	}
 	if bound > 0 {
 		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":                 "proxy pool is currently in use",
+			"error":                  "proxy pool is currently in use",
 			"bound_connection_count": bound,
 		})
 		return

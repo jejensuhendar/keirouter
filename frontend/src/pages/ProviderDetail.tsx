@@ -1386,6 +1386,50 @@ function DeviceFlow({ provider, onClose }: { provider: OAuthProvider; onClose: (
     setError("");
     try {
       const res = await api.oauthDeviceCode(provider.provider);
+
+      // ClientDeviceCode flow: the browser must make the upstream device-code
+      // HTTP request itself (the Go backend is blocked by TLS-fingerprinting
+      // WAFs such as Alibaba Cloud WAF used by Qwen).
+      if (res._client_device_code) {
+        const params = new URLSearchParams({
+          client_id: res._client_id!,
+          scope: (res._scopes ?? []).join(" "),
+          code_challenge: res._pkce_challenge!,
+          code_challenge_method: res._pkce_method ?? "S256",
+        });
+        const upstream = await fetch(res._device_code_url!, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body: params.toString(),
+        });
+        if (!upstream.ok) {
+          throw new Error(`Device-code request failed (${upstream.status})`);
+        }
+        const ct = upstream.headers.get("content-type") ?? "";
+        if (!ct.includes("json")) {
+          throw new Error(
+            "Provider returned an unexpected response (possibly a CAPTCHA page). Please try again later.",
+          );
+        }
+        const dcData = await upstream.json();
+        const submitted = await api.oauthDeviceCodeSubmit(provider.provider, {
+          nonce: res._pkce_nonce!,
+          device_code: dcData.device_code,
+          user_code: dcData.user_code ?? "",
+          verification_uri: dcData.verification_uri ?? "",
+          verification_uri_complete: dcData.verification_uri_complete ?? "",
+          expires_in: dcData.expires_in ?? 300,
+          interval: dcData.interval ?? 5,
+        });
+        setDc(submitted);
+        setStatus("waiting");
+        poll(submitted.device_code, submitted.interval);
+        return;
+      }
+
       setDc(res);
       setStatus("waiting");
       poll(res.device_code, res.interval);

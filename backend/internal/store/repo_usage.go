@@ -73,6 +73,62 @@ func (r *UsageRepo) SpendAndTokens(ctx context.Context, scope BudgetScope, scope
 	return costMicros, tokens, nil
 }
 
+// SpendScope identifies a scope for batch spend queries.
+type SpendScope struct {
+	Kind    BudgetScope
+	ScopeID string
+	Since   time.Time
+}
+
+// SpendResult holds the result of a single scope's spend query.
+type SpendResult struct {
+	CostMicros int64
+	Tokens     int64
+}
+
+// SpendAndTokensBatch fetches spend+tokens for multiple scopes in a single
+// SQL round-trip using UNION ALL. This eliminates N sequential queries when
+// the budget engine checks key+project+tenant scopes per request.
+func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope) ([]SpendResult, error) {
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+	results := make([]SpendResult, len(scopes))
+
+	// Build UNION ALL query: one SELECT per scope.
+	var query string
+	args := make([]any, 0, len(scopes)*2)
+	for i, s := range scopes {
+		column := scopeColumn(s.Kind)
+		if column == "" {
+			return nil, fmt.Errorf("store: unknown budget scope %q", s.Kind)
+		}
+		if i > 0 {
+			query += " UNION ALL "
+		}
+		query += fmt.Sprintf(
+			"SELECT COALESCE(SUM(cost_micros), 0), COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM usage_records WHERE %s = ? AND created_at >= ?",
+			column)
+		args = append(args, s.ScopeID, formatTime(s.Since))
+	}
+	query = r.db.rebind(query)
+
+	rows, err := r.db.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: spend batch: %w", err)
+	}
+	defer rows.Close()
+
+	i := 0
+	for rows.Next() && i < len(results) {
+		if err := rows.Scan(&results[i].CostMicros, &results[i].Tokens); err != nil {
+			return nil, fmt.Errorf("store: spend batch scan: %w", err)
+		}
+		i++
+	}
+	return results, rows.Err()
+}
+
 // scopeColumn maps a budget scope to its SQL column name.
 func scopeColumn(scope BudgetScope) string {
 	switch scope {
@@ -255,9 +311,9 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	var out []RecentRecord
 	for rows.Next() {
 		var (
-			rec                   RecentRecord
+			rec                      RecentRecord
 			cacheHit, caveman, terse int
-			createdAt             string
+			createdAt                string
 		)
 		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
 			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
@@ -429,7 +485,7 @@ func (r *UsageRepo) Timeline(ctx context.Context, tenantID string, since time.Ti
 		WHERE tenant_id = ? AND created_at >= ? AND created_at <= ?
 		GROUP BY bucket
 		ORDER BY bucket ASC`)
-		
+
 	rows, err := r.db.sql.QueryContext(ctx, q, formatTime(since), slotSecs, tenantID, formatTime(since), formatTime(to))
 	if err != nil {
 		return nil, fmt.Errorf("store: usage timeline: %w", err)
@@ -451,11 +507,11 @@ func (r *UsageRepo) Timeline(ctx context.Context, tenantID string, since time.Ti
 
 // DailyPoint represents one day of usage for a specific API key.
 type DailyPoint struct {
-	Date             string  `json:"date"`
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	CostMicros       int64   `json:"cost_micros"`
+	Date             string `json:"date"`
+	Requests         int64  `json:"requests"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	CostMicros       int64  `json:"cost_micros"`
 }
 
 // DailyByKey returns per-day usage breakdown for a specific API key since the

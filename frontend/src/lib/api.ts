@@ -21,6 +21,7 @@ export interface Provider {
   icon: string;
   deprecated: boolean;
   hidden: boolean;
+  pinned: boolean;
   notice: string;
   drivable: boolean;
   input_per_m: number;
@@ -80,6 +81,14 @@ export interface DeviceCode {
   verification_uri_complete: string;
   expires_in: number;
   interval: number;
+  // Client-device-code step 1 response (browser must make the upstream call).
+  _client_device_code?: boolean;
+  _pkce_challenge?: string;
+  _pkce_nonce?: string;
+  _device_code_url?: string;
+  _client_id?: string;
+  _scopes?: string[];
+  _pkce_method?: string;
 }
 
 export interface OAuthPollResult {
@@ -814,6 +823,18 @@ export const api = {
     request<{ id: string; provider: string; email: string }>("POST", `/oauth/${provider}/exchange`, input),
   oauthDeviceCode: (provider: string) =>
     request<DeviceCode>("POST", `/oauth/${provider}/device-code`, {}),
+  oauthDeviceCodeSubmit: (
+    provider: string,
+    input: {
+      nonce: string;
+      device_code: string;
+      user_code: string;
+      verification_uri: string;
+      verification_uri_complete: string;
+      expires_in: number;
+      interval: number;
+    },
+  ) => request<DeviceCode>("POST", `/oauth/${provider}/device-code-submit`, input),
   oauthPoll: (provider: string, deviceCode: string, label?: string) =>
     request<OAuthPollResult>("POST", `/oauth/${provider}/poll`, { device_code: deviceCode, label }),
 

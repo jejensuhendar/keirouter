@@ -13,7 +13,7 @@ func TestRequestAffinityKeyPrefersExplicitHeader(t *testing.T) {
 	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	r.Header.Set("X-Conversation-ID", "thread-123")
 
-	got := requestAffinityKey(r, nil, &core.ChatRequest{})
+	got := requestAffinityKey(r, &core.ChatRequest{})
 	require.Equal(t, "header:x-conversation-id:thread-123", got)
 }
 
@@ -40,5 +40,5 @@ func TestRequestAffinityKeyUsesStableFirstUserFingerprint(t *testing.T) {
 		},
 	}
 
-	require.Equal(t, requestAffinityKey(r, nil, base), requestAffinityKey(r, nil, followUp))
+	require.Equal(t, requestAffinityKey(r, base), requestAffinityKey(r, followUp))
 }

@@ -42,6 +42,17 @@ type ProviderConfig struct {
 	// ExtraTokenParams are added to the token exchange request body
 	// (provider quirks, e.g. Cline requires client_type=extension).
 	ExtraTokenParams map[string]string
+	// DeviceCodePKCE enables PKCE for device-code flows (e.g. Qwen requires
+	// code_challenge + code_challenge_method on the device-code request).
+	DeviceCodePKCE bool
+	// UserAgent overrides the default Go User-Agent header on HTTP requests.
+	// Some providers (Qwen) sit behind a WAF that blocks Go-http-client/1.1.
+	UserAgent string
+	// ClientDeviceCode tells the gateway to let the browser (frontend) make
+	// the device-code HTTP request instead of the Go backend.  This is
+	// required when the provider's WAF uses TLS fingerprinting to block
+	// non-browser clients (e.g. Qwen / Alibaba Cloud WAF).
+	ClientDeviceCode bool
 
 	// CallbackPath and FixedLoopbackPort mirror CLI OAuth loopback callbacks.
 	// Providers with FixedLoopbackPort set ignore the dashboard-provided
@@ -144,13 +155,16 @@ var configs = map[string]ProviderConfig{
 		UserInfoURL:   "https://api.github.com/user",
 	},
 	"qwen": {
-		Provider:      "qwen",
-		Flow:          FlowDeviceCode,
-		ClientID:      "f0304373b74a44d2b584a3fb70ca9e56",
-		DeviceCodeURL: "https://chat.qwen.ai/api/v1/oauth2/device/code",
-		TokenURL:      "https://chat.qwen.ai/api/v1/oauth2/token",
-		Scopes:        []string{"openid", "profile", "email", "model.completion"},
-		UserInfoURL:   "https://chat.qwen.ai/api/v1/oauth2/userinfo",
+		Provider:         "qwen",
+		Flow:             FlowDeviceCode,
+		ClientID:         "f0304373b74a44d2b584a3fb70ca9e56",
+		DeviceCodeURL:    "https://chat.qwen.ai/api/v1/oauth2/device/code",
+		TokenURL:         "https://chat.qwen.ai/api/v1/oauth2/token",
+		Scopes:           []string{"openid", "profile", "email", "model.completion"},
+		UserInfoURL:      "https://chat.qwen.ai/api/v1/oauth2/userinfo",
+		DeviceCodePKCE:   true,
+		UserAgent:        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+		ClientDeviceCode: true,
 	},
 	"cline": {
 		Provider:               "cline",

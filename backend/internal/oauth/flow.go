@@ -539,6 +539,9 @@ func (c ProviderConfig) tokenRequestStatus(ctx context.Context, endpoint string,
 		return nil, 0, fmt.Errorf("oauth: build token request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
 	if c.UsesBasicAuth && c.ClientSecret != "" {
 		cred := base64.StdEncoding.EncodeToString([]byte(c.ClientID + ":" + c.ClientSecret))
 		req.Header.Set("Authorization", "Basic "+cred)

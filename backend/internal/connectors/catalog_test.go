@@ -32,7 +32,7 @@ func TestSpecsByKind(t *testing.T) {
 		core.ServiceSTT:    {"deepgram", "assemblyai", "groq"},
 		core.ServiceTTS:    {"elevenlabs", "inworld"},
 		core.ServiceSearch: {"tavily", "brave-search", "serper", "exa"},
-		core.ServiceFetch:  {"firecrawl", "jina-reader", "tavily"},
+		core.ServiceFetch:  {"firecrawl", "exa", "tavily"},
 	}
 	for kind, wantProviders := range cases {
 		specs := SpecsByKind(kind)

@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,8 +22,9 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/consolelog"
-	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/fastjson"
+	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
 	"github.com/mydisha/keirouter/backend/internal/pipeline"
@@ -335,11 +335,20 @@ func collapseDoubleV1(next http.Handler) http.Handler {
 
 // ---- HTTP helpers -----------------------------------------------------------
 
-// writeJSON writes a JSON response with the given status.
+// writeJSON writes a JSON response with the given status. Uses Sonic-backed
+// fastjson.Marshal instead of encoding/json.NewEncoder to avoid per-response
+// encoder allocation and benefit from JIT-compiled serialization.
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	data, err := fastjson.Marshal(v)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"json marshal failed"}`))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(data)
 }
 
 // writeError writes an OpenAI-style error envelope.

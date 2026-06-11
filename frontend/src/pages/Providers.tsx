@@ -83,8 +83,11 @@ const POPULARITY: Record<string, number> = {
 };
 const DEFAULT_RANK = 999;
 
-function sortByPopularity<T extends { id: string }>(list: T[]): T[] {
+function sortByPopularity<T extends { id: string; pinned?: boolean }>(list: T[]): T[] {
   return [...list].sort((a, b) => {
+    // Pinned providers always come first.
+    if (a.pinned && !b.pinned) return -1;
+    if (!a.pinned && b.pinned) return 1;
     const ra = POPULARITY[a.id] ?? DEFAULT_RANK;
     const rb = POPULARITY[b.id] ?? DEFAULT_RANK;
     return ra - rb;

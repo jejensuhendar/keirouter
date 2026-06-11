@@ -136,11 +136,15 @@ func (s *RedisStore) Nearest(ctx context.Context, vec []float32) (Entry, float64
 	}
 
 	// Prune stale index entries (best-effort, non-blocking).
+	// Use a Redis pipeline to batch all SREMs into a single round-trip
+	// instead of launching one goroutine per stale key.
 	if len(staleKeys) > 0 {
 		go func() {
+			pipe := s.client.Pipeline()
 			for _, k := range staleKeys {
-				_ = s.client.SRem(context.Background(), s.indexKey(), k).Err()
+				pipe.SRem(context.Background(), s.indexKey(), k)
 			}
+			_, _ = pipe.Exec(context.Background())
 		}()
 	}
 

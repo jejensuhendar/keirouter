@@ -30,6 +30,7 @@ func (s *Server) mountOAuth(r chi.Router) {
 	r.Post("/oauth/{provider}/authorize", s.oauthAuthorize)
 	r.Post("/oauth/{provider}/exchange", s.oauthExchange)
 	r.Post("/oauth/{provider}/device-code", s.oauthDeviceCode)
+	r.Post("/oauth/{provider}/device-code-submit", s.oauthDeviceCodeSubmit)
 	r.Post("/oauth/{provider}/poll", s.oauthPoll)
 }
 
@@ -233,7 +234,50 @@ func (s *Server) oauthDeviceCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dc, err := cfg.RequestDeviceCode(r.Context(), "")
+	// Some device-code providers (Qwen) require PKCE on the device-code
+	// request and the subsequent token poll.
+	var challenge, verifier string
+	if cfg.DeviceCodePKCE {
+		pkce, perr := oauth.GeneratePKCE(cfg.PKCEVerifierBytes)
+		if perr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate PKCE: "+perr.Error())
+			return
+		}
+		challenge = pkce.Challenge
+		verifier = pkce.Verifier
+	}
+
+	// ClientDeviceCode providers (Qwen) sit behind a WAF that uses TLS
+	// fingerprinting to block non-browser HTTP clients.  The Go backend
+	// cannot reach their device-code endpoint at all, so we delegate the
+	// HTTP call to the browser (frontend) which has a legitimate browser
+	// TLS fingerprint.
+	//
+	// Step 1: return PKCE challenge + endpoint metadata so the frontend
+	//         can make the device-code request itself.
+	// Step 2 (device-code-submit): the frontend sends back the device-code
+	//         response it received; we store the session for polling.
+	if cfg.ClientDeviceCode {
+		nonce := uuid.NewString()
+		s.oauthSessions.Put(nonce, &oauth.Session{
+			Provider: provider,
+			Flow:     cfg.Flow,
+			Verifier: verifier,
+			Interval: 5,
+		})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"_client_device_code": true,
+			"_pkce_challenge":     challenge,
+			"_pkce_nonce":         nonce,
+			"_device_code_url":    cfg.DeviceCodeURL,
+			"_client_id":          cfg.ClientID,
+			"_scopes":             cfg.Scopes,
+			"_pkce_method":        "S256",
+		})
+		return
+	}
+
+	dc, err := cfg.RequestDeviceCode(r.Context(), challenge)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -244,6 +288,7 @@ func (s *Server) oauthDeviceCode(w http.ResponseWriter, r *http.Request) {
 		Provider:   provider,
 		Flow:       cfg.Flow,
 		DeviceCode: dc.DeviceCode,
+		Verifier:   verifier,
 		Interval:   dc.Interval,
 	})
 
@@ -254,6 +299,65 @@ func (s *Server) oauthDeviceCode(w http.ResponseWriter, r *http.Request) {
 		"verification_uri_complete": dc.VerificationURIComplete,
 		"expires_in":                dc.ExpiresIn,
 		"interval":                  dc.Interval,
+	})
+}
+
+// oauthDeviceCodeSubmit is step 2 of the ClientDeviceCode flow. The frontend
+// has made the device-code HTTP request in the browser and now submits the
+// response so the backend can store the session for polling.
+func (s *Server) oauthDeviceCodeSubmit(w http.ResponseWriter, r *http.Request) {
+	provider := chi.URLParam(r, "provider")
+	cfg, ok := oauth.ConfigFor(provider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "no OAuth config for provider: "+provider)
+		return
+	}
+
+	var body struct {
+		Nonce                   string `json:"nonce"`
+		DeviceCode              string `json:"device_code"`
+		UserCode                string `json:"user_code"`
+		VerificationURI         string `json:"verification_uri"`
+		VerificationURIComplete string `json:"verification_uri_complete"`
+		ExpiresIn               int    `json:"expires_in"`
+		Interval                int    `json:"interval"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Nonce == "" || body.DeviceCode == "" {
+		writeError(w, http.StatusBadRequest, "nonce and device_code are required")
+		return
+	}
+
+	// Look up the pending session created in step 1.
+	sess, ok := s.oauthSessions.Get(body.Nonce)
+	if !ok || sess.Provider != provider {
+		writeError(w, http.StatusBadRequest, "PKCE session not found or expired; restart the flow")
+		return
+	}
+	s.oauthSessions.Delete(body.Nonce)
+
+	if body.Interval <= 0 {
+		body.Interval = 5
+	}
+
+	// Re-key the session by the device code for polling.
+	s.oauthSessions.Put(body.DeviceCode, &oauth.Session{
+		Provider:   provider,
+		Flow:       cfg.Flow,
+		DeviceCode: body.DeviceCode,
+		Verifier:   sess.Verifier,
+		Interval:   body.Interval,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_code":               body.DeviceCode,
+		"user_code":                 body.UserCode,
+		"verification_uri":          body.VerificationURI,
+		"verification_uri_complete": body.VerificationURIComplete,
+		"expires_in":                body.ExpiresIn,
+		"interval":                  body.Interval,
 	})
 }
 
