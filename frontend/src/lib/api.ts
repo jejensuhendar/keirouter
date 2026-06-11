@@ -838,6 +838,23 @@ export const api = {
   qoderDevicePoll: (deviceCode: string, label?: string) =>
     request<OAuthPollResult>("POST", "/qoder/device-poll", { device_code: deviceCode, label }),
 
+  // KiloCode connect flow (custom device-auth). Mounted under /kilocode (not
+  // /oauth/kilocode) to avoid the chi /oauth/{provider} route collision.
+  kilocodeDeviceStart: () =>
+    request<DeviceCode>("POST", "/kilocode/device-start", {}),
+  kilocodeDevicePoll: (deviceCode: string, label?: string) =>
+    request<OAuthPollResult>("POST", "/kilocode/device-poll", { device_code: deviceCode, label }),
+
+  // CodeBuddy connect flow (browser-poll auth). Mounted under /codebuddy.
+  codebuddyAuthStart: () =>
+    request<DeviceCode>("POST", "/codebuddy/auth-start", {}),
+  codebuddyAuthPoll: (deviceCode: string, label?: string) =>
+    request<OAuthPollResult>("POST", "/codebuddy/auth-poll", { device_code: deviceCode, label }),
+
+  // Cursor connect flow (import token from Cursor IDE). Mounted under /cursor.
+  cursorImport: (token: string, label?: string) =>
+    request<{ id: string; provider: string }>("POST", "/cursor/import", { token, label }),
+
   // System monitoring.
   systemMonitor: () => request<SystemSnapshot>("GET", "/system"),
   systemHistory: () => request<SystemHistory>("GET", "/system/history"),

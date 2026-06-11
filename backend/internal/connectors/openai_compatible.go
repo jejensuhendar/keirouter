@@ -60,6 +60,24 @@ func (c *OpenAICompatible) headers(creds core.Credentials) map[string]string {
 		return mergeHeaders(h, creds.Headers)
 	}
 
+	// Cline requires a workos: prefix on the access token and custom headers.
+	if c.id == "cline" {
+		tok := creds.AccessToken
+		if tok == "" {
+			tok = creds.APIKey
+		}
+		if tok != "" && !strings.HasPrefix(tok, "workos:") {
+			tok = "workos:" + tok
+		}
+		h["Authorization"] = bearer(tok)
+		h["HTTP-Referer"] = "https://cline.bot"
+		h["X-Title"] = "Cline"
+		h["X-CLIENT-TYPE"] = "keirouter"
+		h["X-PLATFORM"] = "unknown"
+		h["X-IS-MULTIROOT"] = "false"
+		return mergeHeaders(h, creds.Headers)
+	}
+
 	switch {
 	case creds.AccessToken != "":
 		h["Authorization"] = bearer(creds.AccessToken)

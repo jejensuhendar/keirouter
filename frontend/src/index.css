@@ -111,6 +111,9 @@
   --color-brand-deepseek: #0ea5e9;
   --color-brand-jcode: #f97316;
   --color-brand-qoder: #ec4899;
+  --color-brand-cursor: #00D4AA;
+  --color-brand-codebuddy: #0052D9;
+  --color-brand-gemini: #4285F4;
 
   /* ── Typography. */
   --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;

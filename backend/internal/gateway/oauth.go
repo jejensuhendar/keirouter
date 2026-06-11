@@ -150,7 +150,15 @@ func (s *Server) oauthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens, err := cfg.ExchangeCode(r.Context(), body.Code, sess.RedirectURI, sess.Verifier)
+	var tokens *oauth.Tokens
+	var err error
+	if provider == "cline" {
+		// Cline uses a non-standard exchange (base64-embedded tokens or
+		// JSON body with client_type=extension).
+		tokens, err = cfg.ExchangeClineCode(r.Context(), body.Code, sess.RedirectURI)
+	} else {
+		tokens, err = cfg.ExchangeCode(r.Context(), body.Code, sess.RedirectURI, sess.Verifier)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

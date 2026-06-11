@@ -31,10 +31,17 @@ type ProviderConfig struct {
 	// EncodeAuthSpacesAsPercent mirrors CLIs that build authorize URLs with
 	// encodeURIComponent, where spaces become %20 rather than +.
 	EncodeAuthSpacesAsPercent bool
+	// SkipStandardAuthParams omits response_type, client_id, scope from the
+	// authorize URL (provider quirks, e.g. Cline only wants client_type +
+	// callback_url + redirect_uri).
+	SkipStandardAuthParams bool
 	// NonceBytes adds a random hex nonce parameter to the authorize URL.
 	NonceBytes int
 	// TokenContentType is "form" (x-www-form-urlencoded, default) or "json".
 	TokenContentType string
+	// ExtraTokenParams are added to the token exchange request body
+	// (provider quirks, e.g. Cline requires client_type=extension).
+	ExtraTokenParams map[string]string
 
 	// CallbackPath and FixedLoopbackPort mirror CLI OAuth loopback callbacks.
 	// Providers with FixedLoopbackPort set ignore the dashboard-provided
@@ -146,12 +153,20 @@ var configs = map[string]ProviderConfig{
 		UserInfoURL:   "https://chat.qwen.ai/api/v1/oauth2/userinfo",
 	},
 	"cline": {
-		Provider:     "cline",
-		Flow:         FlowAuthCode,
-		AuthorizeURL: "https://api.cline.bot/api/v1/auth/authorize",
-		TokenURL:     "https://api.cline.bot/api/v1/auth/token",
-		RefreshURL:   "https://api.cline.bot/api/v1/auth/refresh",
-		UserInfoURL:  "https://api.cline.bot/api/v1/auth/userinfo",
+		Provider:               "cline",
+		Flow:                   FlowAuthCode,
+		AuthorizeURL:           "https://api.cline.bot/api/v1/auth/authorize",
+		TokenURL:               "https://api.cline.bot/api/v1/auth/token",
+		RefreshURL:             "https://api.cline.bot/api/v1/auth/refresh",
+		UserInfoURL:            "https://api.cline.bot/api/v1/auth/userinfo",
+		TokenContentType:       "json",
+		SkipStandardAuthParams: true,
+		ExtraAuthParams: map[string]string{
+			"client_type": "extension",
+		},
+		ExtraTokenParams: map[string]string{
+			"client_type": "extension",
+		},
 	},
 	"iflow": {
 		Provider:     "iflow",

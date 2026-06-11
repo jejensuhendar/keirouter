@@ -5,6 +5,9 @@ import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle,
 import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings } from "../lib/api";
 import { KiroConnectModal } from "../components/KiroConnectModal";
 import { QoderConnectModal } from "../components/QoderConnectModal";
+import { KilocodeConnectModal } from "../components/KilocodeConnectModal";
+import { CodebuddyConnectModal } from "../components/CodebuddyConnectModal";
+import { CursorConnectModal } from "../components/CursorConnectModal";
 import { useToast } from "../components/Toast";
 import {
   Card,
@@ -82,6 +85,9 @@ export function ProviderDetailPage() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [kiroOpen, setKiroOpen] = useState(false);
   const [qoderOpen, setQoderOpen] = useState(false);
+  const [kilocodeOpen, setKilocodeOpen] = useState(false);
+  const [codebuddyOpen, setCodebuddyOpen] = useState(false);
+  const [cursorOpen, setCursorOpen] = useState(false);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
 
   // Model search and pagination
@@ -297,7 +303,11 @@ export function ProviderDetailPage() {
 
   const isKiro = provider.id === "kiro";
   const isQoder = provider.id === "qoder";
-  const supportsManualConnect = !isKiro && !isQoder && (
+  const isKilocode = provider.id === "kilocode";
+  const isCodebuddy = provider.id === "codebuddy";
+  const isCursor = provider.id === "cursor";
+  const hasCustomModal = isKiro || isQoder || isKilocode || isCodebuddy || isCursor;
+  const supportsManualConnect = !hasCustomModal && (
     provider.auth_modes.includes("api_key") ||
     provider.auth_modes.includes("none") ||
     !oauthProvider
@@ -362,7 +372,25 @@ export function ProviderDetailPage() {
                     Connect Qoder
                   </Button>
                 )}
-                {!isKiro && !isQoder && oauthProvider && (
+                {isKilocode && (
+                  <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setKilocodeOpen(true)}>
+                    <Plug className="h-3.5 w-3.5" />
+                    Connect Kilo Code
+                  </Button>
+                )}
+                {isCodebuddy && (
+                  <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setCodebuddyOpen(true)}>
+                    <Plug className="h-3.5 w-3.5" />
+                    Connect CodeBuddy
+                  </Button>
+                )}
+                {isCursor && (
+                  <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setCursorOpen(true)}>
+                    <Plug className="h-3.5 w-3.5" />
+                    Connect Cursor
+                  </Button>
+                )}
+                {!hasCustomModal && oauthProvider && (
                   <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setOauthOpen(true)}>
                     <Plug className="h-3.5 w-3.5" />
                     Connect {provider.display_name}
@@ -548,6 +576,9 @@ export function ProviderDetailPage() {
       )}
       {kiroOpen && <KiroConnectModal onClose={() => setKiroOpen(false)} />}
       {qoderOpen && <QoderConnectModal onClose={() => setQoderOpen(false)} />}
+      {kilocodeOpen && <KilocodeConnectModal onClose={() => setKilocodeOpen(false)} />}
+      {codebuddyOpen && <CodebuddyConnectModal onClose={() => setCodebuddyOpen(false)} />}
+      {cursorOpen && <CursorConnectModal onClose={() => setCursorOpen(false)} />}
       {addKeyOpen && (
         <AddApiKeyModal
           provider={provider}
@@ -1161,8 +1192,15 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
   const [pasted, setPasted] = useState("");
   const [exchanging, setExchanging] = useState(false);
   const stateRef = useRef("");
+  const popupRef = useRef<Window | null>(null);
 
   const finishSuccess = () => {
+    // Close the OAuth popup from the opener side (the popup's own
+    // window.close() may be blocked after cross-origin redirects).
+    if (popupRef.current && !popupRef.current.closed) {
+      try { popupRef.current.close(); } catch { /* ignore */ }
+      popupRef.current = null;
+    }
     setDone(true);
     qc.invalidateQueries({ queryKey: ["accounts"] });
     setTimeout(onClose, 1500);
@@ -1206,7 +1244,7 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
     try {
       const res = await api.oauthAuthorize(provider.provider, redirectURIForProvider(provider));
       stateRef.current = res.state;
-      window.open(res.authorize_url, "_blank", "popup,width=560,height=760");
+      popupRef.current = window.open(res.authorize_url, "_blank", "popup,width=560,height=760");
       // Always attempt the seamless flow. Whenever the gateway is co-located
       // with the browser, its loopback callback catches the redirect and
       // notifies us via postMessage — regardless of the dashboard's hostname.

@@ -39,6 +39,18 @@ type authParam struct {
 }
 
 func (c ProviderConfig) authParams(redirectURI, state, challenge string) []authParam {
+	// Cline and similar providers only want their custom params, not the
+	// standard OAuth response_type / client_id / scope.
+	if c.SkipStandardAuthParams {
+		params := []authParam{
+			{"redirect_uri", redirectURI},
+			{"callback_url", redirectURI},
+		}
+		c.appendExtraAuthParams(&params)
+		params = append(params, authParam{"state", state})
+		return params
+	}
+
 	params := []authParam{
 		{"response_type", "code"},
 		{"client_id", c.ClientID},
@@ -132,6 +144,10 @@ func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, ver
 	if c.ClientSecret != "" && !c.UsesBasicAuth {
 		form.Set("client_secret", c.ClientSecret)
 	}
+	// Provider-specific token exchange params (e.g. Cline's client_type).
+	for k, v := range c.ExtraTokenParams {
+		form.Set(k, v)
+	}
 
 	raw, err := c.tokenRequest(ctx, c.TokenURL, form)
 	if err != nil {
@@ -145,6 +161,141 @@ func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, ver
 	// Best-effort: fetch the connected user's profile so the dashboard can
 	// show a human-readable label (email / display name).
 	c.FetchUserInfo(ctx, tokens)
+	return tokens, nil
+}
+
+// ExchangeClineCode handles Cline's non-standard OAuth exchange. Cline's
+// callback code may be base64-encoded JSON carrying the tokens directly; if
+// decoding fails it falls back to a JSON-body token exchange with
+// client_type=extension.
+func (c ProviderConfig) ExchangeClineCode(ctx context.Context, code, redirectURI string) (*Tokens, error) {
+	// 1. Attempt base64-embedded tokens (Cline sometimes sends this).
+	if tokens, err := tryClineBase64Code(code); err == nil {
+		c.FetchUserInfo(ctx, tokens)
+		return tokens, nil
+	}
+
+	// 2. Standard JSON token exchange with Cline-specific params.
+	payload := map[string]string{
+		"grant_type":   "authorization_code",
+		"code":         code,
+		"redirect_uri": redirectURI,
+		"client_type":  "extension",
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("oauth: build cline token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("oauth: cline token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("oauth: cline token exchange: %s: %s", resp.Status, string(raw))
+	}
+
+	tokens, err := mapClineTokenResponse(raw)
+	if err != nil {
+		return nil, err
+	}
+	c.FetchUserInfo(ctx, tokens)
+	return tokens, nil
+}
+
+// tryClineBase64Code attempts to decode Cline's base64-encoded code that
+// carries tokens as embedded JSON.
+func tryClineBase64Code(code string) (*Tokens, error) {
+	b64 := code
+	if pad := len(b64) % 4; pad != 0 {
+		b64 += strings.Repeat("=", 4-pad)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, err
+	}
+	s := string(decoded)
+	last := strings.LastIndex(s, "}")
+	if last < 0 {
+		return nil, fmt.Errorf("no JSON in decoded code")
+	}
+	var obj struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		Email        string `json:"email"`
+		ExpiresAt    string `json:"expiresAt"`
+	}
+	if err := json.Unmarshal([]byte(s[:last+1]), &obj); err != nil {
+		return nil, err
+	}
+	if obj.AccessToken == "" {
+		return nil, fmt.Errorf("no accessToken in embedded code")
+	}
+	tokens := &Tokens{AccessToken: obj.AccessToken, RefreshToken: obj.RefreshToken, Email: obj.Email}
+	if obj.ExpiresAt != "" {
+		if t, err := time.Parse(time.RFC3339, obj.ExpiresAt); err == nil {
+			tokens.ExpiresIn = int(time.Until(t).Seconds())
+		}
+	}
+	return tokens, nil
+}
+
+// mapClineTokenResponse handles Cline's non-standard response shape:
+// { data: { accessToken, refreshToken, userInfo: { email }, expiresAt } }
+// or the flat variant { accessToken, refreshToken, email, expiresAt }.
+func mapClineTokenResponse(raw []byte) (*Tokens, error) {
+	var wrapper struct {
+		Data *struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+			UserInfo     struct {
+				Email string `json:"email"`
+			} `json:"userInfo"`
+			ExpiresAt string `json:"expiresAt"`
+		} `json:"data"`
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+		Email        string `json:"email"`
+		ExpiresAt    string `json:"expiresAt"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		return nil, fmt.Errorf("oauth: parse cline token response: %w", err)
+	}
+	if wrapper.Error != "" {
+		return nil, fmt.Errorf("oauth: cline: %s", wrapper.Error)
+	}
+
+	// Prefer wrapped data.* fields, fall back to flat.
+	at, rt, email, expiresAt := wrapper.AccessToken, wrapper.RefreshToken, wrapper.Email, wrapper.ExpiresAt
+	if wrapper.Data != nil {
+		if wrapper.Data.AccessToken != "" {
+			at = wrapper.Data.AccessToken
+		}
+		if wrapper.Data.RefreshToken != "" {
+			rt = wrapper.Data.RefreshToken
+		}
+		if wrapper.Data.UserInfo.Email != "" {
+			email = wrapper.Data.UserInfo.Email
+		}
+		if wrapper.Data.ExpiresAt != "" {
+			expiresAt = wrapper.Data.ExpiresAt
+		}
+	}
+	if at == "" {
+		return nil, fmt.Errorf("oauth: cline token response missing accessToken")
+	}
+	tokens := &Tokens{AccessToken: at, RefreshToken: rt, Email: email}
+	if expiresAt != "" {
+		if t, err := time.Parse(time.RFC3339, expiresAt); err == nil {
+			tokens.ExpiresIn = int(time.Until(t).Seconds())
+		}
+	}
 	return tokens, nil
 }
 

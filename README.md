@@ -40,11 +40,16 @@ It's built with Go, which means it’s incredibly lightweight (using barely ~20M
 - 💸 **Save Serious Cash:** 
   - **Input Compression:** It shrinks massive logs, code diffs, and file structures before sending them to the LLM. 
   - **Output Compression:** Tell the AI to speak in "terse mode" to cut out all the yapping and just give you the code.
+  - **Savings Dashboard:** See exactly how much money you've saved with a detailed breakdown of input and output compression ratios.
 - 💰 **Budget Engine:** Set per-key or per-organization USD and token hard limits with auto-cutoff to prevent unexpected bills.
+- 📋 **Plans & Policy Templates:** Create reusable budget templates with spend limits, token limits, reset periods, allowed models, and alert thresholds. Assign plans to API keys so you define the rules once and apply them everywhere.
+- 🎨 **Branding & White-Label:** Customize the entire dashboard and portal with your own name, logo, favicon, tagline, and color palette. Perfect for teams and organizations that want a white-labeled AI gateway.
 - 🛠️ **Skills System:** Enhance your LLM interactions with built-in skills (Web Search, Image Generation, Text-to-Speech, etc.) natively routed through the gateway.
-- 🔐 **Super Secure:** Your API keys are encrypted with military-grade envelope encryption (AES-256-GCM). We never store plain text keys. Your local dashboard is also protected by a secure password and HMAC session cookies.
-- 📊 **Track Everything:** Wondering where your money is going? The beautiful dashboard gives you a detailed Quota Tracker, Provider usage breakdowns, and real-time API Key monitoring.
-- ⚡ **Lightning Fast Caching:** Ask the same question twice? The semantic cache remembers the answer and gives it back to you instantly, for exactly $0.00.
+- 🔧 **CLI Tools Auto-Config:** KeiRouter generates ready-to-paste configuration snippets for 11+ coding tools—Claude Code, Cursor, Cline, GitHub Copilot, DeepSeek, KiloCode, and more.
+- 🔐 **Super Secure:** Your API keys are encrypted with military-grade envelope encryption (AES-256-GCM). We never store plain text keys. Your local dashboard is also protected by a secure password and HMAC session cookies. Includes SSRF protection on all outbound requests.
+- 📊 **Track Everything:** Wondering where your money is going? The beautiful dashboard gives you a detailed Quota Tracker, Provider usage breakdowns, real-time API Key monitoring, TTFT (time-to-first-token) metrics, and per-key usage summaries.
+- ⚡ **Lightning Fast Caching:** Ask the same question twice? The semantic cache (powered by embeddings) remembers the answer and gives it back to you instantly, for exactly $0.00.
+- 🌐 **Usage Portal:** Give your team members a dedicated portal to view their own API key usage, quota, and token savings—no admin access needed.
 
 <p align="center">
   <img src="assets/keirouter-providers-banner.png" alt="Manage AI Providers" width="800">
@@ -135,6 +140,56 @@ KeiRouter isn't just for chat! It supports everything:
 ## 🔑 Connect via OAuth (No API Keys needed!)
 Tired of copying API keys? You can connect providers like Claude, GitHub Copilot, Gemini CLI, and more directly from the Connections page using OAuth. Just click, sign in, and KeiRouter handles securely refreshing your tokens in the background!
 
+Supported OAuth/custom-auth flows include:
+- **Claude** — Anthropic OAuth
+- **GitHub Copilot** — GitHub device flow
+- **Gemini CLI** — Google device flow
+- **KiloCode** — Custom device-auth
+- **Qoder** — PKCE device-token flow
+- **CodeBuddy** (Tencent) — Browser-poll flow
+- **Cursor** — Token import flow
+
+## 📋 Plans & Budget Templates
+Plans let you define reusable budget policies that can be assigned to any API key. Instead of configuring limits per key, create a plan once and apply it everywhere.
+
+Each plan defines:
+- **Spend Limit** — USD budget cap (in micro-dollars for precision)
+- **Token Limit** — Maximum token usage
+- **Reset Period** — `daily`, `weekly`, `monthly`, or `total`
+- **Allowed Models** — Restrict to specific models using wildcard patterns (e.g., `claude-*`, `gpt-4*`); empty means all models allowed
+- **Alert Threshold** — Percentage (1–100) at which alerts fire before budget exhaustion
+- **Hard Cutoff** — When enabled, requests are blocked once the budget is exhausted; when disabled, usage is tracked but not enforced
+
+A default plan is automatically created for each tenant. Plans can be managed from the dashboard's Plans page and assigned to API keys in the Keys settings.
+
+## 🎨 Branding & White-Label
+Make KeiRouter your own! The branding system lets you customize the entire look and feel of both the admin dashboard and the public-facing Usage Portal.
+
+Customizable settings include:
+- **App Name** — Replace "KeiRouter" with your organization's name
+- **Logo URL** — Your custom logo (SVG/PNG)
+- **Favicon URL** — Custom browser tab icon
+- **Tagline** — Short text shown on the portal login screen
+- **Color Palette** — Choose from predefined palettes: `sage-terra`, `ocean`, `midnight`, and more
+
+All branding settings are managed from the **Settings → Branding** tab in the dashboard.
+
+## 🔧 CLI Tools Auto-Config
+KeiRouter can generate ready-to-paste configuration snippets for your favorite AI coding tools. Visit the **CLI Tools** page in the dashboard to get the exact config you need for:
+
+Claude Code · Cursor · Cline · GitHub Copilot · DeepSeek · KiloCode · OpenCode · OpenClaw · Hermes · JCode · Droid · CodeBuddy
+
+Just copy the snippet, paste it into your tool's config, and you're connected!
+
+## 🌐 Usage Portal
+The Usage Portal gives your team members a dedicated, non-admin view to monitor their own API usage. Each user can:
+- View their API key's quota and spend
+- Track token usage over time
+- See token savings from input/output compression
+- Monitor their assigned plan limits
+
+The portal is accessible at `/portal` and requires only the API key to log in—no admin credentials needed.
+
 <a name="architecture"></a>
 ## 🛠️ Architecture for the curious
 Curious how it works under the hood? Here's the life of a request:
@@ -143,6 +198,34 @@ Curious how it works under the hood? Here's the life of a request:
 3. **Dispatch:** Picks the best provider account and handles fallbacks.
 4. **Connector & Transform:** Talks to the provider and translates the response back into the format your tool expects.
 5. **Meter:** Logs how many tokens you used so you can view it on the dashboard.
+
+## 🌐 Supported Providers (60+)
+KeiRouter connects to a massive roster of AI providers out of the box. Here's the full list:
+
+**🧠 LLM / Chat Providers:**
+
+| Category | Providers |
+|----------|-----------|
+| **Major Cloud** | OpenAI, Anthropic, Google Gemini, Vertex AI, Azure OpenAI, AWS (Kiro) |
+| **Free / Free Tier** | OpenRouter (27+ free models), NVIDIA NIM, Ollama (Cloud & Local), Cloudflare Workers AI, BytePlus ModelArk |
+| **China / Asia** | DeepSeek, Qwen (Alibaba), GLM, Kimi (Moonshot), MiniMax, Volcengine Ark, Xiaomi MiMo, SiliconFlow, iFlow |
+| **OAuth / IDE** | Claude Code, GitHub Copilot, Cursor IDE, Cline, Kilo Code, OpenAI Codex, CodeBuddy (Tencent), Kimi Coding |
+| **Performance** | Groq, Cerebras, SambaNova, DeepInfra |
+| **Specialized** | xAI (Grok), Mistral, Perplexity, Cohere, AI21 Labs, Reka AI |
+| **Aggregators** | Together AI, Fireworks AI, Nebius AI, OpenCode, AIML API, Vercel AI Gateway |
+| **Emerging** | Blackbox AI, Chutes AI, Hyperbolic, Lepton AI, Kluster AI, MorphLLM, LongCat, Puter AI, GLHF, SumoPod, Scaleway, NLP Cloud, and many more |
+| **Custom** | Any OpenAI-compatible or Anthropic-compatible endpoint (self-hosted, proxy, etc.) |
+
+**🎨 Media & Search Providers:**
+
+| Type | Providers |
+|------|-----------|
+| **Image Generation** | OpenAI DALL·E, Gemini Imagen, Cloudflare, Fal.ai, Stability AI, Black Forest Labs, Recraft, Topaz, Runway ML, NanoBanana, HuggingFace, SD WebUI, ComfyUI |
+| **Text-to-Speech** | OpenAI TTS, NVIDIA NIM, ElevenLabs, Deepgram, Cartesia, PlayHT, AWS Polly, Google TTS, Edge TTS, Inworld, Coqui, Tortoise |
+| **Speech-to-Text** | OpenAI Whisper, Groq Whisper, Deepgram, AssemblyAI, Gemini STT, HuggingFace |
+| **Embeddings** | OpenAI, Gemini, Mistral, Together AI, Fireworks AI, Nebius, Voyage AI, Jina AI, OpenRouter |
+| **Web Search** | Tavily, Exa, Serper, Brave Search, SearXNG, Perplexity, xAI, Google PSE, Linkup, SearchAPI, You.com, OpenAI |
+| **Web Fetch** | Tavily, Exa, Firecrawl, Jina Reader |
 
 ## ⚙️ Configuration
 By default, KeiRouter uses an embedded SQLite database (zero config required!). If you are deploying it for a team, you can use PostgreSQL. Just copy `config.example.yaml` and run with `-config`, or use environment variables like `KEIROUTER_SERVER__PORT=8080`. Docker/Coolify examples live in [deploy/README.md](deploy/README.md).

@@ -159,20 +159,24 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function Badge({
   children,
   tone = "neutral",
+  title,
 }: {
   children: ReactNode;
-  tone?: "neutral" | "accent" | "secondary" | "danger" | "success";
+  tone?: "neutral" | "accent" | "secondary" | "danger" | "warning" | "success";
+  title?: string;
 }) {
   const tones = {
     neutral: "bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300",
     accent: "bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200",
     secondary: "bg-secondary-100 text-secondary-700 dark:bg-secondary-800/40 dark:text-secondary-200",
     danger: "bg-[color:var(--color-danger)]/15 text-[color:var(--color-danger)]",
+    warning: "bg-[color:var(--color-warning)]/15 text-[color:var(--color-warning)]",
     success: "bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200",
   };
   return (
     <span
       className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${tones[tone]}`}
+      title={title}
     >
       {children}
     </span>

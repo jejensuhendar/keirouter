@@ -167,7 +167,13 @@ func (s *Server) completeOAuthCallback(r *http.Request, providerHint string) err
 		return fmt.Errorf("unknown provider: %s", provider)
 	}
 
-	tokens, err := cfg.ExchangeCode(r.Context(), code, sess.RedirectURI, sess.Verifier)
+	var tokens *oauth.Tokens
+	var err error
+	if provider == "cline" {
+		tokens, err = cfg.ExchangeClineCode(r.Context(), code, sess.RedirectURI)
+	} else {
+		tokens, err = cfg.ExchangeCode(r.Context(), code, sess.RedirectURI, sess.Verifier)
+	}
 	if err != nil {
 		return fmt.Errorf("token exchange failed: %w", err)
 	}
