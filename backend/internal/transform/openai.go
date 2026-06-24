@@ -330,60 +330,115 @@ func fallbackResponseFormat(responseFormat json.RawMessage) json.RawMessage {
 // validation without polluting the conversation.
 const reasoningPlaceholder = " "
 
+// reasoningScope controls how aggressively reasoning_content is injected on
+// assistant messages that lack it. DeepSeek requires it on ALL assistant
+// turns, while Kimi only requires it on turns that carry tool_calls.
+type reasoningScope int
+
+const (
+	reasoningNone      reasoningScope = iota
+	reasoningAll                      // inject on all assistant messages (DeepSeek)
+	reasoningToolCalls                // inject only on assistant messages with tool_calls (Kimi)
+)
+
+// reasoningEchoScope classifies a provider/model into the reasoning_content
+// injection scope. DeepSeek's thinking-capable models (including those served
+// via OpenAI-compatible aggregators like OpenRouter, SiliconFlow, Fireworks)
+// require it on every assistant turn. Kimi models require it only on turns
+// that carry tool_calls. Other providers don't need it at all.
+func reasoningEchoScope(providerID, model string) reasoningScope {
+	m := strings.ToLower(model)
+	if providerID == "deepseek" || strings.Contains(m, "deepseek") {
+		return reasoningAll
+	}
+	// Kimi models (e.g. kimi-k2, kimi-latest) require reasoning_content only
+	// on assistant turns with tool_calls.
+	if strings.HasPrefix(m, "kimi-") || strings.HasPrefix(m, "moonshot/kimi-") {
+		return reasoningToolCalls
+	}
+	return reasoningNone
+}
+
 // requiresReasoningEcho reports whether the given provider/model echoes
 // reasoning_content in thinking mode and rejects (400) follow-up turns that
-// omit it. DeepSeek's thinking-capable models are the primary case; matching
-// on the model name also covers DeepSeek served via OpenAI-compatible
-// aggregators (OpenRouter, SiliconFlow, Fireworks, etc.).
+// omit it. This is kept for backward compatibility with tests and for gating
+// DeepSeek-specific request fixes.
 func requiresReasoningEcho(providerID, model string) bool {
+	return reasoningEchoScope(providerID, model) != reasoningNone
+}
+
+// isDeepSeekTarget reports whether the target is a DeepSeek model. Used to gate
+// DeepSeek-specific request fixes (thinking mode, tool ID sanitization, missing
+// tool response fills) that should not run for Kimi or other providers.
+func isDeepSeekTarget(providerID, model string) bool {
 	if providerID == "deepseek" {
 		return true
 	}
 	return strings.Contains(strings.ToLower(model), "deepseek")
 }
 
+// shouldInjectReasoning reports whether a placeholder reasoning_content should
+// be injected on the given rendered message. The scope controls the breadth:
+//   - reasoningAll: all assistant messages without real reasoning (DeepSeek)
+//   - reasoningToolCalls: only assistant messages that carry tool_calls (Kimi)
+//
+// Messages that already have genuine reasoning_content are never overwritten so
+// the real chain-of-thought is preserved.
+func shouldInjectReasoning(scope reasoningScope, msg oaiMessage) bool {
+	if scope == reasoningNone || msg.Role != string(core.RoleAssistant) {
+		return false
+	}
+	if msg.ReasoningContent != "" {
+		return false // genuine reasoning — never overwrite
+	}
+	if scope == reasoningToolCalls {
+		return len(msg.ToolCalls) > 0
+	}
+	return true // reasoningAll
+}
+
 // RenderRequestForProvider renders an OpenAI request for a specific provider,
 // applying provider-specific fallbacks (e.g. json_schema → json_object) and,
 // for reasoning providers, ensuring assistant messages carry reasoning_content.
 func (c OpenAICodec) RenderRequestForProvider(req *core.ChatRequest, providerID string) ([]byte, error) {
-	injectReasoning := requiresReasoningEcho(providerID, req.Model)
+	scope := reasoningEchoScope(providerID, req.Model)
 	if needsJSONSchemaFallback(providerID, req.ResponseFormat) {
 		clone := *req
 		clone.ResponseFormat = fallbackResponseFormat(req.ResponseFormat)
-		return renderOAIRequestForProvider(&clone, providerID, injectReasoning)
+		return renderOAIRequestForProvider(&clone, providerID, scope)
 	}
-	return renderOAIRequestForProvider(req, providerID, injectReasoning)
+	return renderOAIRequestForProvider(req, providerID, scope)
 }
 
 func (OpenAICodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
-	return renderOAIRequest(req, false)
+	return renderOAIRequest(req, reasoningNone)
 }
 
-func renderOAIRequestForProvider(req *core.ChatRequest, providerID string, injectReasoning bool) ([]byte, error) {
-	out, err := buildOAIRequest(req, injectReasoning)
+func renderOAIRequestForProvider(req *core.ChatRequest, providerID string, scope reasoningScope) ([]byte, error) {
+	out, err := buildOAIRequest(req, scope)
 	if err != nil {
 		return nil, err
 	}
-	if injectReasoning {
+	if isDeepSeekTarget(providerID, req.Model) {
 		applyDeepSeekRequestFixes(out, req, providerID)
 	}
 	return json.Marshal(out)
 }
 
 // renderOAIRequest renders a canonical request to the OpenAI wire format. When
-// injectReasoning is set, assistant messages that carry no real reasoning get a
-// placeholder reasoning_content so reasoning-mode providers (DeepSeek, etc.)
-// don't reject the follow-up turn with a 400. Messages with genuine reasoning
-// are left untouched so the real chain-of-thought is preserved.
-func renderOAIRequest(req *core.ChatRequest, injectReasoning bool) ([]byte, error) {
-	out, err := buildOAIRequest(req, injectReasoning)
+// scope is non-none, assistant messages that carry no real reasoning get a
+// placeholder reasoning_content so reasoning-mode providers (DeepSeek, Kimi,
+// etc.) don't reject the follow-up turn with a 400. Messages with genuine
+// reasoning are left untouched so the real chain-of-thought is preserved.
+func renderOAIRequest(req *core.ChatRequest, scope reasoningScope) ([]byte, error) {
+	out, err := buildOAIRequest(req, scope)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(out)
 }
 
-func buildOAIRequest(req *core.ChatRequest, injectReasoning bool) (*oaiRequest, error) {
+func buildOAIRequest(req *core.ChatRequest, scope reasoningScope) (*oaiRequest, error) {
 	out := oaiRequest{
 		Model:          req.Model,
 		Temperature:    req.Temperature,
@@ -404,11 +459,12 @@ func buildOAIRequest(req *core.ChatRequest, injectReasoning bool) (*oaiRequest, 
 	}
 
 	for _, m := range req.Messages {
-		msg := renderOAIMessage(m)
-		if injectReasoning && msg.Role == string(core.RoleAssistant) && msg.ReasoningContent == "" {
-			msg.ReasoningContent = reasoningPlaceholder
+		for _, msg := range renderOAIMessages(m) {
+			if shouldInjectReasoning(scope, msg) {
+				msg.ReasoningContent = reasoningPlaceholder
+			}
+			out.Messages = append(out.Messages, msg)
 		}
-		out.Messages = append(out.Messages, msg)
 	}
 
 	for _, t := range req.Tools {
@@ -531,12 +587,17 @@ func fillMissingDeepSeekToolResponses(messages []oaiMessage) []oaiMessage {
 		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
 			continue
 		}
-		next := oaiMessage{}
-		if i+1 < len(messages) {
-			next = messages[i+1]
+		// Scan all subsequent consecutive tool messages to collect which
+		// tool_call_ids already have a response. This correctly handles
+		// multiple tool calls followed by multiple tool messages.
+		responded := make(map[string]bool)
+		for j := i + 1; j < len(messages) && messages[j].Role == "tool"; j++ {
+			if messages[j].ToolCallID != "" {
+				responded[messages[j].ToolCallID] = true
+			}
 		}
 		for _, id := range deepSeekToolCallIDs(msg) {
-			if hasDeepSeekToolResult(next, id) {
+			if responded[id] {
 				continue
 			}
 			content, _ := json.Marshal("")
@@ -558,6 +619,59 @@ func deepSeekToolCallIDs(msg oaiMessage) []string {
 
 func hasDeepSeekToolResult(msg oaiMessage, id string) bool {
 	return msg.Role == "tool" && msg.ToolCallID == id
+}
+
+// renderOAIMessages splits a canonical message into one or more OpenAI wire
+// messages. In the OpenAI format, each tool result must be its own message with
+// role "tool" and a tool_call_id. Other content (text, images, tool calls) is
+// rendered into a single message via renderOAIMessage. Tool result messages
+// are emitted first, followed by any remaining content.
+//
+// This is critical for cross-dialect translation: Anthropic groups multiple
+// tool_result blocks into a single user message, but OpenAI (and DeepSeek)
+// require each tool result as a separate "tool" role message. Without this
+// splitting, assistant messages with N tool_calls would be followed by only 1
+// tool message, triggering "insufficient tool messages" 400 errors.
+func renderOAIMessages(m core.Message) []oaiMessage {
+	// Fast path: no tool results → delegate to the single-message renderer.
+	hasToolResult := false
+	for _, p := range m.Content {
+		if p.Type == core.PartToolResult {
+			hasToolResult = true
+			break
+		}
+	}
+	if !hasToolResult {
+		return []oaiMessage{renderOAIMessage(m)}
+	}
+
+	var out []oaiMessage
+	// Emit each tool result as its own OpenAI tool message.
+	for _, p := range m.Content {
+		if p.Type != core.PartToolResult {
+			continue
+		}
+		content, _ := json.Marshal(p.ToolResult.Content)
+		out = append(out, oaiMessage{
+			Role:       "tool",
+			ToolCallID: p.ToolResult.CallID,
+			Content:    content,
+		})
+	}
+
+	// If there's remaining content (text, images, tool calls), render it
+	// into a separate message with the original role.
+	var remaining []core.ContentPart
+	for _, p := range m.Content {
+		if p.Type != core.PartToolResult {
+			remaining = append(remaining, p)
+		}
+	}
+	if len(remaining) > 0 {
+		trimmed := core.Message{Role: m.Role, Name: m.Name, Content: remaining}
+		out = append(out, renderOAIMessage(trimmed))
+	}
+	return out
 }
 
 func renderOAIMessage(m core.Message) oaiMessage {
@@ -593,6 +707,9 @@ func renderOAIMessage(m core.Message) oaiMessage {
 			tc.Function.Arguments = ensureToolArgumentsJSONString(p.ToolCall.Arguments)
 			out.ToolCalls = append(out.ToolCalls, tc)
 		case core.PartToolResult:
+			// Tool results are handled by renderOAIMessages; if we reach
+			// here via direct renderOAIMessage call, handle the first one
+			// for backward compatibility.
 			out.Role = "tool"
 			out.ToolCallID = p.ToolResult.CallID
 			content, _ := json.Marshal(p.ToolResult.Content)
