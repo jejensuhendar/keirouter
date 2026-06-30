@@ -120,7 +120,6 @@ func (s *Server) mountAdmin(r chi.Router) {
 	s.mountCustomFlows(r)
 	s.mountCustomProviders(r)
 
-
 	s.mountCLITools(r)
 
 	// Branding / white-label settings.
@@ -174,6 +173,12 @@ func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
 			"input_per_m":   p.InputPerM,
 			"output_per_m":  p.OutputPerM,
 		}
+		// Custom (user-defined) provider instances expose their configured base
+		// URL so the dashboard can surface it on the provider detail page.
+		if p.Custom {
+			entry["custom"] = true
+			entry["base_url"] = p.BaseURL
+		}
 		if len(p.Regions) > 0 {
 			regions := make([]map[string]string, 0, len(p.Regions))
 			for _, r := range p.Regions {
@@ -218,12 +223,12 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type modelInfo struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		Kind     string `json:"kind"`
-		Custom   bool   `json:"custom,omitempty"`
-		DBID     string `json:"db_id,omitempty"`
-		Discovered bool `json:"discovered,omitempty"`
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Kind       string `json:"kind"`
+		Custom     bool   `json:"custom,omitempty"`
+		DBID       string `json:"db_id,omitempty"`
+		Discovered bool   `json:"discovered,omitempty"`
 	}
 	modelKind := func(kind core.ServiceKind) core.ServiceKind {
 		if kind == "" {
@@ -259,7 +264,6 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 		out = append(out, mi)
 		seen[m.ID] = true
 	}
-
 
 	// Live model discovery (best-effort, requires a connected account).
 	if src := connectors.GetLiveModelSource(providerID); src != nil && s.accounts != nil && s.vault != nil {
