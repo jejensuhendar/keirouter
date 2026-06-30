@@ -117,7 +117,7 @@ brew tap mydisha/keirouter https://github.com/mydisha/keirouter
 brew install keirouter
 
 keirouter -bootstrap   # mint your first API key (printed once — don't blink)
-keirouter              # fire up the server on :20180
+keirouter start        # fire up the server on :20180
 ```
 </details>
 
@@ -169,7 +169,7 @@ It downloads the latest prebuilt binary, drops it (plus the dashboard) into `%LO
 
 ```powershell
 keirouter -bootstrap   # mint your first API key (printed once)
-keirouter              # start the server on :20180
+keirouter start        # start the server on :20180
 ```
 
 > Pin a version or change the location with `$env:KEIROUTER_VERSION` / `$env:KEIROUTER_DIR` before running the one-liner.

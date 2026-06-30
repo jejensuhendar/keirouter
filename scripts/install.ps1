@@ -153,7 +153,7 @@ Write-Ok "KeiRouter $Version installed."
 Write-Host ""
 Write-Host "Quick start:" -ForegroundColor Cyan
 Write-Host "  keirouter -bootstrap     # create your first API key (shown once)"
-Write-Host "  keirouter                # start the server on :20180"
+Write-Host "  keirouter start          # start the server on :20180"
 Write-Host ""
 Write-Host "Dashboard: http://localhost:20180  (default password: keirouter)"
 Write-Host ""
