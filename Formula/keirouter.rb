@@ -34,13 +34,13 @@ class Keirouter < Formula
     <<~EOS
       Quick start:
         keirouter -bootstrap    # create your first API key
-        keirouter               # start server on :20180
+        keirouter start         # start server on :20180
 
       Dashboard: http://localhost:20180  (default password: keirouter)
     EOS
   end
 
   test do
-    assert_match "KeiRouter", shell_output("\#{bin}/keirouter --help 2>&1", 2)
+    assert_match "KeiRouter", shell_output("#{bin}/keirouter --help 2>&1")
   end
 end
