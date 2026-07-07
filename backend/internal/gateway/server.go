@@ -215,6 +215,7 @@ func (s *Server) routes() chi.Router {
 	// Collapse a duplicated /v1/v1 prefix before routing. Must run first so the
 	// rewritten path reaches the real /v1/* routes below.
 	r.Use(collapseDoubleV1)
+	r.Use(securityHeadersMiddleware)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
