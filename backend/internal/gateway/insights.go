@@ -664,6 +664,11 @@ func (s *Server) adminUpdateProxyPool(w http.ResponseWriter, r *http.Request) {
 		pool.Name = *body.Name
 	}
 	if body.ProxyURL != nil {
+		if err := httputil.ValidateProxyURL(*body.ProxyURL); err != nil {
+			s.log.Warn("blocked suspicious proxy URL during update", "url", *body.ProxyURL, "error", err)
+			writeError(w, http.StatusBadRequest, "invalid proxy_url: URL blocked by security policy")
+			return
+		}
 		pool.ProxyURL = *body.ProxyURL
 	}
 	if body.NoProxy != nil {
