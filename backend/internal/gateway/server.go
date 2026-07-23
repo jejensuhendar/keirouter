@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -343,11 +344,14 @@ func (s *Server) routes() chi.Router {
 	if s.frontendDir != "" {
 		fs := http.FileServer(http.Dir(s.frontendDir))
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			path := r.URL.Path
-			if path == "/" {
-				path = "/index.html"
+			p := r.URL.Path
+			if p == "/" {
+				p = "/index.html"
 			}
-			fullPath := filepath.Join(s.frontendDir, path)
+			// Security: clean the path before checking existence to prevent path
+			// traversal from leaking whether arbitrary system files exist.
+			cleanPath := path.Clean("/" + p)
+			fullPath := filepath.Join(s.frontendDir, filepath.FromSlash(cleanPath))
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 				r.URL.Path = "/"
 			}
