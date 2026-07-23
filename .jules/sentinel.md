@@ -1,0 +1,4 @@
+## 2024-05-24 - [Fix Path Traversal in Static File Serving]
+**Vulnerability:** Found a path traversal vulnerability in `backend/internal/gateway/server.go`. While `http.FileServer` handles path traversal internally during `ServeHTTP`, the custom `os.Stat(fullPath)` check used an uncleaned `r.URL.Path` before `fs.ServeHTTP`, exposing an existence check for arbitrary system files (information disclosure).
+**Learning:** Checking file existence with `os.Stat` on unsanitized user inputs *before* handing it over to a safe library like `http.FileServer` can leak file existence information via timing or status codes.
+**Prevention:** Always sanitize paths with `path.Clean` (and ensure they are absolute with `/" + p`) before using them in file system operations like `os.Stat` or `filepath.Join`, even if a downstream library provides protection.
